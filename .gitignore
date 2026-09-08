@@ -7,3 +7,7 @@ log/
 *.pgm
 *.db3
 *.mcap
+
+# arduino-cli is fetched into bin/ by hand (34 MB static binary, used to
+# compile and flash the ESP32 firmware). Not source; do not commit it.
+bin/

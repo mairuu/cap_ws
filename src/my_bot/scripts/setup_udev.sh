@@ -78,9 +78,28 @@ echo
 
 # --- ask which is which -------------------------------------------------------
 #
-# Autodetection is not possible here: the ESP32 and the lidar are both plain
-# serial adapters with no protocol we can safely probe (poking the lidar's port
-# spins its motor, poking the ESP32 resets it via DTR).
+# The human still answers, because a wrong answer here is the one failure this
+# script cannot fail loudly on: both adapters are 10c4:ea60 with the same
+# non-unique serial, so the rules match on USB port path and crossed names look
+# exactly like working names. It happened on 2026-09-08 -- see
+# udev/99-my-bot-serial.rules.
+#
+# But the answer IS checkable, which the earlier comment here denied:
+#
+#   YDLidar -- streams ~4.5 kB/s of 0xAA55 frames from the moment it has power
+#              and never stops. Reading it does not spin the motor: the motor is
+#              already spinning, which is why there is a stream to read. It has
+#              no command interface, so an `e` sent at it is inert.
+#   ESP32   -- silent until spoken to, and answers `e` with two integers.
+#
+# Volume alone settles it. `# boot reset=1 encoders=ok` is a second signal when
+# the open happens to reset the board, but that is not dependable: whether an
+# open resets depends on the DTR/RTS state the last close left behind (`hupcl`),
+# so classify() asks `e` rather than waiting for a banner.
+#
+# Advisory, not authoritative -- it says "unknown" for a board that is
+# unpowered, held by another process, or mid-flash, and it must never override a
+# human who can see the cables. It refuses only on a straight contradiction.
 
 pick() {
   local prompt="$1" ans
@@ -103,6 +122,74 @@ LIDAR_DEV="$(pick 'Which number is the YDLidar? ')"
 if [ "$ESP_DEV" = "$LIDAR_DEV" ]; then
   echo "Those are the same device. Aborting." >&2
   exit 1
+fi
+
+# --- check those answers against the wire -------------------------------------
+
+# Say what a port sounds like: esp32, lidar or unknown.
+LISTEN_SECS=2
+LIDAR_BYTES=3000        # the X2 clears this in well under a second
+classify() {
+  local dev="$1" tmp size reply
+  tmp="$(mktemp)"
+  # One open, held on fd 3, so the termios settings and the reply belong to the
+  # same session -- closing between them can reset both the port and the board.
+  exec 3<>"$dev" || { rm -f "$tmp"; echo unknown; return; }
+  stty -F "$dev" 57600 raw -echo 2>/dev/null || true
+
+  timeout "$LISTEN_SECS" cat <&3 >"$tmp" 2>/dev/null || true
+  size="$(stat -c%s "$tmp")"
+  if [ "$size" -gt "$LIDAR_BYTES" ]; then
+    exec 3<&-; rm -f "$tmp"; echo lidar; return
+  fi
+  if grep -aq '# boot' "$tmp"; then
+    exec 3<&-; rm -f "$tmp"; echo esp32; return
+  fi
+  rm -f "$tmp"
+
+  # Quiet so far. Ask it something only the firmware answers.
+  printf 'e\r' >&3
+  reply=''
+  read -r -t 1 -u 3 reply 2>/dev/null || true
+  exec 3<&-
+  reply="${reply%$'\r'}"
+  if [[ "$reply" =~ ^-?[0-9]+[[:space:]]+-?[0-9]+$ ]]; then
+    echo esp32; return
+  fi
+  echo unknown
+}
+
+echo
+echo "Checking those answers against the wire (${LISTEN_SECS}s each)..."
+ESP_HEARD="$(classify "$ESP_DEV")"
+LIDAR_HEARD="$(classify "$LIDAR_DEV")"
+printf '  %s answered as: %s\n' "$ESP_DEV" "$ESP_HEARD"
+printf '  %s answered as: %s\n' "$LIDAR_DEV" "$LIDAR_HEARD"
+
+CONTRADICTED=0
+[ "$ESP_HEARD" = lidar ] && CONTRADICTED=1
+[ "$LIDAR_HEARD" = esp32 ] && CONTRADICTED=1
+
+if [ "$CONTRADICTED" -eq 1 ]; then
+  echo
+  echo "That is backwards. $ESP_DEV sounds like the lidar and/or $LIDAR_DEV" >&2
+  echo "sounds like the ESP32 -- swap your two answers and run this again." >&2
+  echo "Installing as answered would cross /dev/esp32 and /dev/ydlidar, and" >&2
+  echo "nothing downstream would report an error; the lidar driver would just" >&2
+  echo "see silence and ros2_control would see noise." >&2
+  exit 1
+fi
+
+if [ "$ESP_HEARD" != esp32 ]; then
+  echo
+  echo "warn: $ESP_DEV did not answer \`e\` with two counts (heard:" >&2
+  echo "  $ESP_HEARD). Unpowered, held by another process, or running firmware" >&2
+  echo "  that does not speak this protocol. Proceeding on your answer." >&2
+fi
+if [ "$LIDAR_HEARD" != lidar ]; then
+  echo
+  echo "warn: $LIDAR_DEV is not streaming, so it does not sound like a powered" >&2
+  echo "  lidar (heard: $LIDAR_HEARD). Proceeding on your answer." >&2
 fi
 
 # --- choose a matching key ----------------------------------------------------
