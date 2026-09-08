@@ -1,0 +1,9 @@
+build/
+install/
+log/
+**/__pycache__/
+*.pyc
+**/.venv/
+*.pgm
+*.db3
+*.mcap
