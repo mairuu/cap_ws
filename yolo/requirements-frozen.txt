@@ -1,0 +1,54 @@
+# FROZEN 2026-09-09 from the working venv at ~/yolo/venv. REFERENCE ONLY.
+#
+# Rebuild with ./setup_yolo_venv.sh, NOT from this file. A freeze records
+# versions; it cannot record ORDER or EXCLUSIONS, and on this platform both
+# matter more than the versions do:
+#
+#   - torch/torchvision MUST be the JetPack aarch64 wheels installed FIRST and
+#     by direct URL. They are listed below as plain versions, and pip installing
+#     them from PyPI gets a CPU-only or x86 wheel that satisfies this file and
+#     does not work.
+#   - opencv-python is DELIBERATELY ABSENT. The system cv2 (4.5.4) is used via
+#     --system-site-packages. Installing the PyPI wheel shadows it.
+#   - numpy is pinned < 2 because the system cv2 is built against 1.x.
+#   - cuda/cudnn/tensorrt/cudss are NOT pip packages here at all. See
+#     setup_yolo_venv.sh step 0 and records/decisions.md D-15.
+#
+# NEVER run `uv sync` against this venv. See the recovered uv.lock warning in
+# reference/nvme-recovery-audit.md.
+#
+certifi==2026.7.22
+charset-normalizer==3.5.1
+cloudpickle==3.1.2
+contourpy==1.3.2
+cycler==0.12.1
+filelock==3.32.6
+fonttools==4.64.0
+fsspec==2026.7.0
+idna==3.19
+jinja2==3.1.6
+kiwisolver==1.5.1
+markupsafe==3.0.3
+matplotlib==3.10.9
+mpmath==1.3.0
+networkx==3.4.2
+numpy==1.26.4
+nvidia-ml-py==13.610.43
+packaging==26.3
+pillow==12.3.0
+polars==1.44.1
+polars-runtime-32==1.44.1
+psutil==7.2.2
+pyparsing==3.3.2
+python-dateutil==2.9.0.post0
+pyyaml==6.0.3
+requests==2.34.2
+setuptools==81.0.0
+six==1.17.0
+sympy==1.14.0
+torch @ https://pypi.jetson-ai-lab.io/jp6/cu126/+f/46b/b8b13f844b211/torch-2.11.0-cp310-cp310-linux_aarch64.whl
+torchvision @ https://pypi.jetson-ai-lab.io/jp6/cu126/+f/d11/6f08d3d62417d/torchvision-0.26.0-cp310-cp310-linux_aarch64.whl
+typing-extensions==4.16.0
+ultralytics==8.4.144
+ultralytics-thop==2.1.6
+urllib3==2.7.0
