@@ -1,0 +1,132 @@
+# RViz layout for navigation + exploration.
+#
+# Plain `rviz2` starts with nothing but a Grid, which is why the screen looks
+# empty even when the whole stack is running correctly. This config adds the
+# displays that actually matter and sets Fixed Frame to map.
+#
+#   make rviz
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Property Tree Widget:
+      Expanded: ~
+    Tree Height: 600
+  - Class: rviz_common/Tool Properties
+    Name: Tool Properties
+Visualization Manager:
+  Class: ""
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: map
+    Frame Rate: 15
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 1
+      Plane Cell Count: 20
+      Color: 160; 160; 164
+      Alpha: 0.5
+      Reference Frame: <Fixed Frame>
+    # The SLAM map. This is what slam_toolbox builds as you drive.
+    - Class: rviz_default_plugins/Map
+      Name: Map
+      Enabled: true
+      Topic:
+        Value: /map
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+        Depth: 1
+      Color Scheme: map
+      Alpha: 0.7
+    # Nav2's inflated global costmap. Turn on when a goal is rejected as
+    # unplannable -- it shows the inflation actually blocking the path.
+    - Class: rviz_default_plugins/Map
+      Name: Global Costmap
+      Enabled: false
+      Topic:
+        Value: /global_costmap/costmap
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+        Depth: 1
+      Color Scheme: costmap
+      Alpha: 0.5
+    - Class: rviz_default_plugins/RobotModel
+      Name: RobotModel
+      Enabled: true
+      Description Source: Topic
+      Description Topic:
+        Value: /robot_description
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+        Depth: 1
+      Alpha: 1
+    # YDLidar / sim scan. BEST_EFFORT: the driver publishes sensor-data QoS,
+    # and a Reliable subscriber here would never match it.
+    - Class: rviz_default_plugins/LaserScan
+      Name: LaserScan
+      Enabled: true
+      Topic:
+        Value: /scan
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+        Depth: 5
+      Size (m): 0.03
+      Style: Points
+      Color: 255; 85; 0
+      Color Transformer: FlatColor
+    # The global plan Nav2 is following.
+    - Class: rviz_default_plugins/Path
+      Name: Global Plan
+      Enabled: true
+      Topic:
+        Value: /plan
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+        Depth: 5
+      Color: 0; 255; 0
+      Line Style: Lines
+    # DWB's chosen local trajectory.
+    - Class: rviz_default_plugins/Path
+      Name: Local Plan
+      Enabled: true
+      Topic:
+        Value: /local_plan
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+        Depth: 5
+      Color: 0; 170; 255
+      Line Style: Lines
+    # Frontier markers from explore_lite -- the fastest way to see WHY the
+    # robot chose the direction it did during `make explore`.
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Frontiers
+      Enabled: true
+      Topic:
+        Value: /explore/frontiers
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+        Depth: 100
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: false
+      Show Names: true
+      Marker Scale: 0.4
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    # "2D Goal Pose" -- click a destination and Nav2 drives there.
+    - Class: rviz_default_plugins/SetGoal
+      Topic:
+        Value: /goal_pose
+    - Class: rviz_default_plugins/Measure
+  Global Options:
+    Fixed Frame: map
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      Name: Current View
+      Target Frame: base_link
+      Scale: 90
+      X: 0
+      Y: 0

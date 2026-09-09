@@ -11,3 +11,9 @@ log/
 # arduino-cli is fetched into bin/ by hand (34 MB static binary, used to
 # compile and flash the ESP32 firmware). Not source; do not commit it.
 bin/
+
+# Third-party, built from source by `make lidar-deps` at a pinned branch.
+# Not vendored: it is a pristine upstream checkout (humble @ 4ef70d3) and the
+# Makefile target reproduces it exactly. Vendoring it would bury a 3000-line
+# upstream diff in our history for no gain.
+/src/ydlidar_ros2_driver/

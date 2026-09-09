@@ -76,6 +76,8 @@ install(PROGRAMS
   # Day-2 gate checks. Neither commands motion; both need the ROS stack up.
   scripts/tf_check.py
   scripts/odom_check.py
+  # Day-3 lidar check. Listens only; needs the lidar driver but no TF.
+  scripts/scan_dropout_report.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

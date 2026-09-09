@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 ROS_DISTRO ?= humble
 
-.PHONY: build sim real slam nav explore rviz save-map yolo teleop teleop-nav udev ports clean
+.PHONY: build sim real slam nav explore rviz save-map yolo teleop teleop-nav udev ports lidar-deps clean
 
 # yolo_ros lives in the older dev_ws, not here, so its install has to be on the
 # path for `make yolo`. cap_ws is sourced after it and wins on the packages
@@ -155,6 +155,34 @@ teleop:
 teleop-nav:
 	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
 	ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r /cmd_vel:=/cmd_vel_teleop
+
+# One-time setup: build the YDLidar stack from source. NEITHER piece is an apt
+# package, and without them there is no /scan at all -- `make real` defaults to
+# use_lidar:=true and cannot come up.
+#
+# Two separate things, in this order:
+#   1. YDLidar-SDK   plain CMake, installs libydlidar_sdk.a into /usr/local.
+#                    ydlidar_ros2_driver's find_package(ydlidar_sdk) fails
+#                    without it, so it MUST be installed before the colcon build.
+#   2. ydlidar_ros2_driver   a colcon package, cloned into src/.
+#
+# THE BRANCH IS NOT OPTIONAL. Upstream's default branch is `master` and it is
+# Dashing-era: the launch files pass node_executable= / node_name= (removed in
+# Foxy) and the node calls the one-argument declare_parameter(name), which
+# Humble deprecated and which throws when no override is supplied. The `humble`
+# branch is the one that builds and runs here.
+#
+# Verified 9 Sep 2026: SDK 01cdda4, driver humble @ 4ef70d3, /scan at 11.57 Hz.
+# Re-running this is safe -- both steps skip work that is already done.
+SDK_DIR ?= $(HOME)/YDLidar-SDK
+lidar-deps:
+	@if [ ! -d $(SDK_DIR) ]; then 		git clone https://github.com/YDLIDAR/YDLidar-SDK.git $(SDK_DIR); 	fi
+	cmake -S $(SDK_DIR) -B $(SDK_DIR)/build -DCMAKE_BUILD_TYPE=Release
+	cmake --build $(SDK_DIR)/build -j$$(nproc)
+	sudo cmake --install $(SDK_DIR)/build
+	@if [ ! -d src/ydlidar_ros2_driver ]; then 		git clone -b humble https://github.com/YDLIDAR/ydlidar_ros2_driver.git 			src/ydlidar_ros2_driver; 	fi
+	@branch=$$(git -C src/ydlidar_ros2_driver rev-parse --abbrev-ref HEAD); 	if [ "$$branch" != humble ]; then 		echo "ERROR: src/ydlidar_ros2_driver is on '$$branch', not 'humble'."; 		echo "       master is Dashing-era and will not run on Humble."; 		echo "       git -C src/ydlidar_ros2_driver checkout humble"; 		exit 1; 	fi
+	$(MAKE) build
 
 clean:
 	rm -rf build install log

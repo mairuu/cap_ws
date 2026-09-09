@@ -1,0 +1,141 @@
+# slam_toolbox (async) params for my_bot.
+#
+# Copied from /opt/ros/humble/share/slam_toolbox/config/mapper_params_online_async.yaml
+# and retuned for this robot. cap_ws owns this copy so the workspace is
+# self-contained; do not point slam.launch.py back at slam_toolbox's own config,
+# or a package upgrade silently retunes the mapper. Deltas from upstream are
+# marked "TUNED".
+#
+# FRAMES: slam_toolbox publishes map -> odom. diff_cont publishes odom ->
+# base_link, and robot_state_publisher owns base_link -> base_footprint ->
+# laser_frame. Nothing else may publish map -> odom (no static_transform_publisher,
+# no AMCL) -- two publishers on one TF edge make the map jump.
+
+slam_toolbox:
+  ros__parameters:
+
+    # Plugin params
+    solver_plugin: solver_plugins::CeresSolver
+    ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
+    ceres_preconditioner: SCHUR_JACOBI
+    ceres_trust_strategy: LEVENBERG_MARQUARDT
+    ceres_dogleg_type: TRADITIONAL_DOGLEG
+    ceres_loss_function: None
+
+    # ROS Parameters
+    odom_frame: odom
+    map_frame: map
+    # base_footprint is the ground projection of base_link. This comment used
+    # to say the two were identity; they are NOT (corrected 9 Sep 2026, D-13
+    # re-verification). base_link sits on the wheel AXLE, so robot_core.xacro
+    # drops base_footprint by one wheel_radius (0.0327 m). That is what makes
+    # laser_frame land 0.186 + 0.0327 = 0.2187 m above the floor, matching the
+    # 0.22 m tape measure. Choosing base_footprint here is the nav2 convention
+    # and keeps this file drop-in compatible with nav2_bringup later. Note
+    # diff_cont's base_frame_id is base_link -- that is the odom edge, not
+    # this one.
+    base_frame: base_footprint
+    # Published by ydlidar_ros2_driver_node on the real robot, by ros_gz_bridge
+    # in sim. slam_toolbox subscribes with sensor-data QoS (BEST_EFFORT), which
+    # matches the driver's publisher -- see the QoS warning in ydlidar.yaml.
+    scan_topic: /scan
+    use_map_saver: true
+    mode: mapping #localization
+
+    # if you'd like to immediately start continuing a map at a given pose
+    # or at the dock, but they are mutually exclusive, if pose is given
+    # will use pose
+    #map_file_name: test_steve
+    # map_start_pose: [0.0, 0.0, 0.0]
+    #map_start_at_dock: true
+
+    debug_logging: false
+    throttle_scans: 1
+    transform_publish_period: 0.02 #if 0 never publishes odometry
+    # TUNED: upstream 5.0. The robot is small and slow, so a 5 s map refresh
+    # makes the RViz map lag far behind where you have already driven. Raise
+    # this again if the Jetson can't keep up (watch for "Message Filter
+    # dropping message" warnings).
+    map_update_interval: 2.0
+    resolution: 0.05
+    # TUNED: upstream 0.0 / 20.0. Both now match what the YDLidar X2 actually
+    # reports in the scan message (range_min 0.1, range_max 12.0); rastering
+    # past 12 m only adds noise.
+    #
+    # EXPECTED, IGNORE: on the first scan slam_toolbox logs
+    #   "minimum laser range setting (0.1 m) exceeds the capabilities of the
+    #    used Lidar (0.1 m)"
+    # It compares this double against the message's float32 range_min, which
+    # widens to 0.10000000149, so 0.1 always looks smaller. It clamps to
+    # range_min either way -- the effective value is the one we want. Don't
+    # "fix" it by nudging this to 0.12; that just throws away 2 cm of range.
+    #
+    # These do NOT handle the driver's invalid rays, which come back as 0.0
+    # rather than +inf (invalid_range_is_inf: false in ydlidar.yaml). Karto
+    # rejects sub-range_min readings as "no return" using the scan's own
+    # range_min, so those rays carve free space instead of planting phantom
+    # obstacles -- verified against a synthetic 400-ray scan with every 4th ray
+    # zeroed, which mapped the room at its true size. If the map ever does grow
+    # a solid ring of obstacles right at the robot, that is the assumption
+    # breaking: flip invalid_range_is_inf to true rather than touching these.
+    min_laser_range: 0.1 #for rastering images
+    max_laser_range: 12.0 #for rastering images
+    # TUNED: upstream 0.5. This is a hard floor on how often a scan can enter
+    # the graph AT ALL, and during a turn it was the binding constraint, not
+    # minimum_travel_heading below. At the old max_vel_theta of 1.0 rad/s,
+    # 0.5 s meant 28.6 deg of rotation between consecutive processed scans --
+    # more than twice the 11.5 deg that minimum_travel_heading was asking for,
+    # so most of the scans taken mid-turn were simply thrown away. 0.2 lets the
+    # heading gate be the thing that actually decides.
+    minimum_time_interval: 0.2
+    transform_timeout: 0.2
+    tf_buffer_duration: 30.
+    stack_size_to_use: 40000000 #// program needs a larger stack size to serialize large maps
+    enable_interactive_mode: true
+
+    # General Parameters
+    use_scan_matching: true
+    use_scan_barycenter: true
+    # TUNED: upstream 0.5 m / 0.5 rad. This robot maps small indoor rooms where
+    # 0.5 m between keyframes leaves too little scan overlap for the matcher to
+    # constrain, especially in a corridor. 0.2 costs CPU and graph size for a
+    # denser, better-constrained graph.
+    minimum_travel_distance: 0.2
+    minimum_travel_heading: 0.2
+    scan_buffer_size: 10
+    scan_buffer_maximum_scan_distance: 10.0
+    link_match_minimum_response_fine: 0.1
+    link_scan_maximum_distance: 1.5
+    loop_search_maximum_distance: 3.0
+    do_loop_closing: true
+    # TUNED: upstream 10. minimum_travel_distance dropped to 0.2 above, so a
+    # chain of 10 scans now spans ~2 m instead of ~5 m; 15 keeps the loop-closure
+    # candidate roughly the same physical length and avoids false positives from
+    # short, nearly-identical chains.
+    loop_match_minimum_chain_size: 15
+    loop_match_maximum_variance_coarse: 3.0
+    loop_match_minimum_response_coarse: 0.35
+    loop_match_minimum_response_fine: 0.45
+
+    # Correlation Parameters - Correlation Parameters
+    correlation_search_space_dimension: 0.5
+    correlation_search_space_resolution: 0.01
+    correlation_search_space_smear_deviation: 0.1
+
+    # Correlation Parameters - Loop Closure Parameters
+    loop_search_space_dimension: 8.0
+    loop_search_space_resolution: 0.05
+    loop_search_space_smear_deviation: 0.03
+
+    # Scan Matcher Parameters
+    distance_variance_penalty: 0.5
+    angle_variance_penalty: 1.0
+
+    fine_search_angle_offset: 0.00349
+    coarse_search_angle_offset: 0.349
+    coarse_angle_resolution: 0.0349
+    minimum_angle_penalty: 0.9
+    minimum_distance_penalty: 0.5
+    use_response_expansion: true
+    min_pass_through: 2
+    occupancy_threshold: 0.1
