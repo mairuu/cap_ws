@@ -26,8 +26,11 @@
          wheel centreline (measured on the real robot), so
          0.21/2 + 0.02 = 0.125. This value is exactly half of diff_cont's
          wheel_separation in config/my_controllers.yaml. Change one and you must
-         change the other, or odometry yaw drifts. -->
-    <xacro:property name="wheel_offset_y" value="0.125"/>
+         change the other, or odometry yaw drifts.
+         Raised to 0.12584 on 9 Sep to match wheel_separation 0.25168. The
+         pairing is correct, but see my_controllers.yaml: that separation
+         figure's provenance is not recorded. -->
+    <xacro:property name="wheel_offset_y" value="0.12584"/>
     <xacro:property name="wheel_offset_z" value="0.01"/>
     <!-- MEASURED: 38 mm, which is LARGER than the 34 mm drive wheels. The
          offset_z formula below still drops the caster's contact point exactly
