@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 ROS_DISTRO ?= humble
 
-.PHONY: build sim real slam nav explore rviz save-map yolo teleop teleop-nav udev ports net net-check lidar-deps clean
+.PHONY: build sim real slam nav explore rviz save-map yolo teleop teleop-nav udev ports net net-check viewer-sync lidar-deps clean
 
 # yolo_ros lives in the older dev_ws, not here, so its install has to be on the
 # path for `make yolo`. cap_ws is sourced after it and wins on the packages
@@ -167,10 +167,38 @@ teleop-nav:
 # topics. Re-run after any address change -- the hotspot hands out DHCP and
 # the peer list is literal:
 #   make net PEERS=172.20.10.2,172.20.10.7
+#
+# THIS TARGET ONLY EXISTS HERE. The laptop has no cap_ws and no Makefile -- by
+# design, it needs nothing built. Run the script directly over there instead:
+#   ~/cap_view/setup_ros2_network.sh --peers 172.20.10.2,172.20.10.5
+# `make viewer-sync` is what puts it there.
 DOMAIN ?= 42
 PEERS  ?= 172.20.10.2,172.20.10.5
 net:
 	src/my_bot/scripts/setup_ros2_network.sh --domain $(DOMAIN) --peers $(PEERS)
+
+# Push the three files the viewing laptop needs into ~/cap_view/ on it.
+#
+# They are COPIES, not links, and nothing detects drift: edit nav.rviz here and
+# the laptop keeps showing the old layout until this runs. Re-run after
+# changing any of the three.
+#
+# Deliberately not a full cap_ws checkout on the laptop -- the URDF is
+# primitive geometry with no meshes, so RViz renders the robot straight from
+# /robot_description over the wire, and every display in nav.rviz is a standard
+# message type. Nothing over there needs colcon.
+VIEWER ?= ju@172.20.10.5
+viewer-sync:
+	ssh $(VIEWER) 'mkdir -p ~/cap_view'
+	scp src/my_bot/config/nav.rviz \
+	    src/my_bot/scripts/setup_ros2_network.sh \
+	    src/my_bot/scripts/check_ros2_link.py \
+	    $(VIEWER):~/cap_view/
+	@echo
+	@echo 'On $(VIEWER), once:'
+	@echo '  ~/cap_view/setup_ros2_network.sh --peers $(PEERS)'
+	@echo 'then, in its own terminal:'
+	@echo '  rviz2 -d ~/cap_view/nav.rviz'
 
 # Prove the link carries what the robot actually sends, before blaming RViz.
 # Publisher here, subscriber on the other machine:
