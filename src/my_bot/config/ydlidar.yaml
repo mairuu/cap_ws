@@ -1,0 +1,78 @@
+# YDLidar X2 driver config for the real robot.
+#
+# Copied from ~/dev_ws/src/ydlidar_ros2_driver/params/ydlidar.yaml, which is
+# the standalone setup that was bench-tested. cap_ws owns this copy so the
+# workspace is self-contained; do not point real_robot.launch.py back at the
+# driver package's own params, or a driver upgrade silently retunes the robot.
+#
+# The driver publishes /scan with BEST_EFFORT reliability (sensor data QoS).
+# Subscribers must match -- a default RELIABLE subscription is QoS-incompatible
+# and receives nothing at all, with no error on either side.
+#
+# `port` is overridden from the launch file; the value here is only the
+# fallback. /dev/ydlidar is the udev symlink installed by scripts/setup_udev.sh
+# -- do not put a raw ttyUSB* here, the ESP32 competes for those numbers.
+ydlidar_ros2_driver_node:
+  ros__parameters:
+    port: /dev/ydlidar
+    frame_id: laser_frame        # must match laser_frame in description/lidar.xacro
+    ignore_array: ""
+    baudrate: 115200
+    lidar_type: 1
+    device_type: 0
+    isSingleChannel: true
+    intensity_bit: 0
+    intensity: false
+    sample_rate: 3
+    abnormal_check_count: 4
+    fixed_resolution: true
+    # TRUE: the puck is mounted with its 0 degree reference pointing at the
+    # BACK of the robot, so the raw bearings are 180 degrees out. This makes
+    # the SDK apply `angle = angle + pi` (CYdLidar.cpp, "Rotate 180 degrees or
+    # not"), which runs BEFORE the `inverted` mirror below -- so the two flags
+    # are independent: this one rotates, that one changes handedness.
+    #
+    # With this false the whole scan is rotated by pi: a feature at the robot's
+    # front-right is drawn at its back-left. Unlike a mirrored scan this stays
+    # world-fixed while the robot turns in place, so
+    # scripts/check_scan_world_fixed.py CANNOT catch it -- it only tests
+    # rotation. It breaks on TRANSLATION instead: the error is a reflection
+    # through the lidar centre, and that centre moves with the robot, so
+    # driving forward makes the map smear and slam_toolbox loses the match.
+    #
+    # Simulation is unaffected: Gazebo's gpu_lidar is mounted in the URDF at
+    # laser_frame with identity rotation, so sim needs no equivalent. Do NOT
+    # "fix" this by yawing laser_joint in description/lidar.xacro -- that file
+    # is shared with sim and would break the sim scan instead.
+    reversion: true
+    # TRUE, and it must stay true. The X2 reports ray angles increasing
+    # CLOCKWISE; ROS (REP-103) requires counter-clockwise-positive. This flag
+    # makes the SDK apply `angle = 2*pi - angle` (CYdLidar.cpp, "Is it counter
+    # clockwise"), converting to the ROS convention.
+    #
+    # With this false the scan is MIRRORED, and the failure does not look like
+    # a mirror: a wrong-handed scan counter-rotates at TWICE the robot's yaw
+    # rate once TF places it in odom, because a feature that belongs at bearing
+    # b is emitted at -(b - yaw) and so lands at 2*yaw - b. Driving straight
+    # looks nearly fine; the moment you rotate, the world spins and
+    # slam_toolbox can never match consecutive scans, so the map stays almost
+    # empty and map->odom sits at exactly identity.
+    #
+    # Gazebo's gpu_lidar is counter-clockwise natively, so SIMULATION NEVER
+    # SHOWS THIS -- it is a real-robot-only failure. Verify after any change
+    # with scripts/check_scan_world_fixed.py: turn 90 degrees and the scan must
+    # still overlap itself in the odom frame.
+    inverted: true
+    auto_reconnect: true
+    support_motor_dtr: true
+    angle_max: 180.0
+    angle_min: -180.0
+    range_max: 12.0
+    range_min: 0.1
+    frequency: 10.0
+    # Invalid returns come back as 0.0 rather than +inf. That is BELOW
+    # range_min, so consumers that only check for inf/nan will treat dropouts
+    # as obstacles 0 m away. Measured on the bench: ~50% of the 400 rays are
+    # 0.0 in an ordinary indoor room.
+    invalid_range_is_inf: false
+    debug: false

@@ -1,0 +1,104 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+    <!-- YDLidar X2-class scanner, present in BOTH modes.
+         The link and joint are unconditional so that laser_frame exists in the
+         TF tree either way; only the <gazebo> gpu_lidar sensor at the bottom is
+         sim-gated. That split is the whole point: in sim, Gazebo synthesises
+         /scan and ros_gz_bridge relays it; on the real robot the
+         ydlidar_ros2_driver node publishes /scan directly and there is no
+         Gazebo sensor to simulate. Either way the frame the scan is stamped
+         with, and the transform that places it on the robot, are identical.
+
+         Scan parameters below mirror config/ydlidar.yaml (frame_id, angle
+         range, range limits, 10 Hz) so sim and real agree. -->
+
+    <!-- Puck dimensions, approx YDLidar X2 -->
+    <xacro:property name="lidar_radius" value="0.036"/>
+    <xacro:property name="lidar_length" value="0.035"/>
+    <xacro:property name="lidar_mass" value="0.19"/>
+    <!-- MEASURED on the real robot, and expressed here in the terms that were
+         actually measured (distance from the drive axle, and height above the
+         FLOOR) rather than as offsets from the chassis box, whose own
+         dimensions are still unverified. The joint below is parented to
+         chassis, so both properties add back the base_link -> chassis offset.
+
+         laser_frame lands at (-0.034, 0, 0.186) in base_link.
+
+         NOTE: laser_frame is the SCAN PLANE, not the centre of the puck; that
+         is the frame the driver stamps ranges in, so it is the one that has to
+         be right. The visual cylinder is still drawn centred on it, so the
+         rendered puck is approximate by a couple of centimetres. -->
+    <xacro:property name="lidar_height_above_ground" value="0.22"/>
+    <xacro:property name="lidar_offset_behind_axle" value="0.034"/>
+    <xacro:property name="lidar_offset_x" value="${wheel_offset_x - lidar_offset_behind_axle}"/>
+    <xacro:property name="lidar_offset_z" value="${wheel_offset_z + lidar_height_above_ground - wheel_radius}"/>
+
+    <joint name="laser_joint" type="fixed">
+        <parent link="chassis"/>
+        <child link="laser_frame"/>
+        <origin xyz="${lidar_offset_x} 0 ${lidar_offset_z}" rpy="0 0 0"/>
+    </joint>
+
+    <!-- Name matches config/ydlidar.yaml's frame_id so TF is identical in both
+         modes. The driver stamps scans with this; nothing resolves without it. -->
+    <link name="laser_frame">
+        <visual>
+            <geometry>
+                <cylinder radius="${lidar_radius}" length="${lidar_length}"/>
+            </geometry>
+            <material name="red"/>
+        </visual>
+        <collision>
+            <geometry>
+                <cylinder radius="${lidar_radius}" length="${lidar_length}"/>
+            </geometry>
+        </collision>
+        <xacro:inertial_cylinder mass="${lidar_mass}" length="${lidar_length}" radius="${lidar_radius}">
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+        </xacro:inertial_cylinder>
+    </link>
+
+    <!-- SIMULATION ONLY. On real hardware the driver node is the publisher. -->
+    <xacro:if value="$(arg sim_mode)">
+        <gazebo reference="laser_frame">
+            <material>Gazebo/Red</material>
+
+            <sensor name="laser" type="gpu_lidar">
+                <pose>0 0 0 0 0 0</pose>
+                <topic>scan</topic>
+                <update_rate>10</update_rate>
+                <always_on>true</always_on>
+                <visualize>true</visualize>
+                <!-- Without this the header frame_id is the scoped sensor name
+                     (my_bot/laser_frame/laser), which no TF frame matches. -->
+                <gz_frame_id>laser_frame</gz_frame_id>
+                <lidar>
+                    <scan>
+                        <horizontal>
+                            <!-- The real unit returns 400 rays at its measured
+                                 ~11.6 Hz; 300 here keeps sim cheap and the
+                                 bridge downsamples both to 180 anyway. -->
+                            <samples>300</samples>
+                            <resolution>1</resolution>
+                            <min_angle>-3.14159</min_angle>
+                            <max_angle>3.14159</max_angle>
+                        </horizontal>
+                        <vertical>
+                            <samples>1</samples>
+                            <resolution>1</resolution>
+                            <min_angle>0</min_angle>
+                            <max_angle>0</max_angle>
+                        </vertical>
+                    </scan>
+                    <range>
+                        <min>0.1</min>
+                        <max>12.0</max>
+                        <resolution>0.01</resolution>
+                    </range>
+                </lidar>
+            </sensor>
+        </gazebo>
+    </xacro:if>
+
+</robot>

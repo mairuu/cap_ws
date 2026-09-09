@@ -1,0 +1,79 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+    <xacro:if value="$(arg use_ros2_control)">
+
+        <ros2_control name="RobotSystem" type="system">
+
+            <hardware>
+                <xacro:if value="$(arg sim_mode)">
+                    <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+                </xacro:if>
+                <xacro:unless value="$(arg sim_mode)">
+                    <!-- Real hardware: the ESP32 base controller in ~/firmware,
+                         over its line-oriented serial protocol. -->
+                    <plugin>my_bot/DiffDriveSerial</plugin>
+                    <param name="left_wheel_name">left_wheel_joint</param>
+                    <param name="right_wheel_name">right_wheel_joint</param>
+                    <!-- Stable name from scripts/setup_udev.sh, NOT ttyUSB0:
+                         the lidar is also a USB serial adapter and the two
+                         swap enumeration order across reboots. -->
+                    <param name="device">/dev/esp32</param>
+                    <param name="baud_rate">57600</param>
+                    <param name="timeout_ms">1000</param>
+                    <!-- EQUAL ON PURPOSE. ~/firmware/calibation records
+                         l:2473 r:2556 "measured per wheel by hand", with no
+                         method written down, and that 3.4 percent split was
+                         WRONG, not merely imprecise.
+
+                         Counts per rev is a property of the encoder disc and
+                         the gearbox ratio. Both sides are the same parts, so
+                         the true figures cannot differ by 3 percent; only
+                         TYRE DIAMETER can differ between wheels, and that
+                         belongs in the radius multipliers below, not here.
+
+                         Measured 2026-08-28 with scripts/calibrate_straight.py:
+                         a 3 m closed-loop run ended 62 cm LEFT of the line
+                         while odom reported 0.0000 m of lateral drift and
+                         -0.37 deg of yaw. The loop steers on odom, so it held
+                         the ESTIMATED arcs equal, which with this split forces
+                         the right wheel to physically turn 3.4 percent further
+                         than the left. Predicted drift from that alone: 57 cm.
+                         Measured: 62 cm. The split explained 93 percent of it.
+
+                         2514 is the mean of the two old figures, so forward
+                         distance scale is unchanged; only the heading bias
+                         goes away. Re-derive with scripts/calibrate_correct.py
+                         if you ever re-measure. -->
+                    <param name="enc_counts_per_rev_left">2475</param>
+                    <param name="enc_counts_per_rev_right">2470</param>
+                    <!-- MUST match PID_RATE_HZ in the firmware's config.h. The
+                         `m` command takes ticks per firmware PID frame, so a
+                         mismatch silently scales every commanded speed. -->
+                    <param name="loop_rate">30</param>
+                </xacro:unless>
+            </hardware>
+
+            <joint name="left_wheel_joint">
+                <command_interface name="velocity">
+                    <param name="min">-10</param>
+                    <param name="max">10</param>
+                </command_interface>
+                <state_interface name="velocity"/>
+                <state_interface name="position"/>
+            </joint>
+
+            <joint name="right_wheel_joint">
+                <command_interface name="velocity">
+                    <param name="min">-10</param>
+                    <param name="max">10</param>
+                </command_interface>
+                <state_interface name="velocity"/>
+                <state_interface name="position"/>
+            </joint>
+
+        </ros2_control>
+
+    </xacro:if>
+
+</robot>

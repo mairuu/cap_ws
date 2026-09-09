@@ -32,11 +32,17 @@ sim: build
 # first becomes /dev/ttyUSB0, so raw ttyUSB* numbers are a coin flip across
 # reboots. `make udev` installs stable names for both; run it once per machine.
 # Override only if you need a raw port:  make real LIDAR_PORT=/dev/ttyUSB0
+#
+# USE_LIDAR=false brings up drive and odometry WITHOUT the lidar. Needed until
+# ydlidar_ros2_driver is built from source -- it is not an apt package, and a
+# missing executable takes the whole launch down, base included:
+#   make real USE_LIDAR=false
 LIDAR_PORT ?= /dev/ydlidar
+USE_LIDAR ?= true
 real: build
 	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
 	source install/setup.bash && \
-	ros2 launch my_bot real_robot.launch.py lidar_port:=$(LIDAR_PORT)
+	ros2 launch my_bot real_robot.launch.py lidar_port:=$(LIDAR_PORT) use_lidar:=$(USE_LIDAR)
 
 # Online async SLAM. Starts ONLY the mapper, so `make real` (or `make sim`)
 # must already be running in another terminal -- otherwise there is no /scan

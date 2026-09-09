@@ -1,0 +1,10 @@
+<library path="my_bot_hardware">
+  <class name="my_bot/DiffDriveSerial"
+         type="my_bot::DiffDriveSerial"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>
+      ros2_control system interface for the ESP32 differential-drive base
+      controller, speaking its line-oriented serial protocol.
+    </description>
+  </class>
+</library>

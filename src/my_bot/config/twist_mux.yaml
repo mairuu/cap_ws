@@ -1,0 +1,38 @@
+# Velocity arbitration between Nav2 and the human.
+#
+# diff_cont has use_stamped_vel:false, so it listens on
+# /diff_cont/cmd_vel_unstamped -- NOT /cmd_vel. Nothing in Nav2 publishes
+# there, which is why Nav2 alone plans a perfect path and the robot never
+# moves. twist_mux bridges that gap and arbitrates at the same time:
+#
+#   /cmd_vel          (Nav2, prio 10)  --+
+#                                        +-> twist_mux -> /diff_cont/cmd_vel_unstamped
+#   /cmd_vel_teleop   (you,  prio 100) --+
+#
+# Highest priority with a live publisher wins. Teleop outranks Nav2, so
+# touching the keyboard overrides an autonomous run instantly -- this is the
+# software e-stop. It matters here because neither diff_cont nor
+# hardware/diffdrive_serial.cpp clamps velocity: whatever is commanded goes
+# straight to the ESP32.
+#
+# Drive manually while Nav2 is running:
+#   ros2 run teleop_twist_keyboard teleop_twist_keyboard \
+#     --ros-args -r /cmd_vel:=/cmd_vel_teleop
+#
+# timeout is how long a source stays "active" after its last message. Teleop
+# must be > the keyboard repeat gap or Nav2 grabs control back between
+# keystrokes; 0.5 s is comfortable.
+
+twist_mux:
+  ros__parameters:
+    use_stamped: false
+
+    topics:
+      navigation:
+        topic: cmd_vel
+        timeout: 0.5
+        priority: 10
+      teleop:
+        topic: cmd_vel_teleop
+        timeout: 0.5
+        priority: 100
