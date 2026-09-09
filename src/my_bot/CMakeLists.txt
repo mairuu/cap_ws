@@ -73,6 +73,9 @@ install(PROGRAMS
   scripts/encoder_report.py
   scripts/motor_check.py
   scripts/boot_check.py
+  # Day-2 gate checks. Neither commands motion; both need the ROS stack up.
+  scripts/tf_check.py
+  scripts/odom_check.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
