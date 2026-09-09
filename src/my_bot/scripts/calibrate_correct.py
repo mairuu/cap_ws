@@ -41,8 +41,54 @@ import os
 import re
 import sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-PKG = os.path.dirname(HERE)
+def find_pkg():
+    """Locate the my_bot source tree, from wherever this script was started.
+
+    This used to be `dirname(dirname(abspath(__file__)))`, which assumed the
+    source layout src/my_bot/scripts/. Under `ros2 run` the script is found at
+    install/my_bot/lib/my_bot/, so that walked up to install/my_bot/lib and
+    looked for config/ there -- FileNotFoundError, every time. The script had
+    only ever been run as ./src/my_bot/scripts/calibrate_correct.py.
+
+    Three candidates, in order:
+
+      1. realpath(__file__). With `colcon build --symlink-install` -- which is
+         what `make build` does -- the installed script IS a symlink back into
+         src/, so resolving it lands in the source tree. That is the answer we
+         want: this tool reports numbers you then edit BY HAND, and editing the
+         installed copy of a non-symlink build would be silently thrown away by
+         the next build.
+      2. abspath(__file__), for a plain source-tree invocation.
+      3. the ament share directory, for a non-symlink install. Imported lazily
+         so this stays runnable with no ROS environment sourced.
+
+    A candidate only counts if it actually holds both files we read.
+    """
+    def ok(base):
+        return base and all(os.path.exists(os.path.join(base, *parts)) for parts in
+                            (('config', 'my_controllers.yaml'),
+                             ('description', 'ros2_control.xacro')))
+
+    for base in (os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
+                 os.path.dirname(os.path.dirname(os.path.abspath(__file__)))):
+        if ok(base):
+            return base
+
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        base = get_package_share_directory('my_bot')
+        if ok(base):
+            return base
+    except Exception:
+        pass
+
+    sys.exit(
+        'ERROR: cannot find my_bot config/ and description/ from %s.\n'
+        '       Run from the workspace after `make build`, or from the source '
+        'tree.' % os.path.abspath(__file__))
+
+
+PKG = find_pkg()
 CONTROLLERS = os.path.join(PKG, 'config', 'my_controllers.yaml')
 ROS2_CONTROL = os.path.join(PKG, 'description', 'ros2_control.xacro')
 
@@ -114,6 +160,7 @@ def main():
 
     print('=' * 66)
     print('CURRENTLY INSTALLED')
+    print('  read from %s' % PKG)
     print('  wheel_radius                   %.5f m' % radius)
     print('  wheel_separation               %.5f m' % sep)
     print('  left/right radius multiplier   %.5f / %.5f' % (mult_l, mult_r))
