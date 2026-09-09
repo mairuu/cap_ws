@@ -11,6 +11,12 @@ controller_manager:
 
 diff_cont:
   ros__parameters:
+    # CAPPED BY update_rate ABOVE. diff_drive_controller cannot publish faster
+    # than the controller_manager ticks, so the real /diff_cont/odom and TF rate
+    # is 30 Hz, not 50 -- measured 9 Sep. The 50 is harmless but do not trust it
+    # as documentation: raising it changes nothing, and raising update_rate to
+    # match would break the firmware's PID frame (see loop_rate in
+    # description/ros2_control.xacro).
     publish_rate: 50.0
     base_frame_id: base_link
 

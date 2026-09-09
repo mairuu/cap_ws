@@ -42,6 +42,7 @@ Needs real_robot.launch.py up. Ctrl-C to stop, or --seconds to bound it.
 import argparse
 import math
 import sys
+import time
 
 import rclpy
 from nav_msgs.msg import Odometry
@@ -67,11 +68,19 @@ class OdomCheck(Node):
         self.unwrapped_yaw = 0.0
         self.prev_yaw = None
         self.create_subscription(Odometry, ODOM_TOPIC, self.cb, 10)
-        self.create_timer(0.5, self.report)
+        # On a terminal, redraw one line in place. When stdout is redirected to a
+        # file there is no cursor to return, so \r just concatenates every update
+        # into one unreadable line -- print periodically instead, and only when
+        # something actually moved.
+        self.tty = sys.stdout.isatty()
+        self.create_timer(0.5 if self.tty else 2.0, self.report)
+        self.last_printed = None
         if seconds:
             self.create_timer(float(seconds), self.stop)
         self.done = False
-        print(f'\n  listening on {ODOM_TOPIC} -- move the robot by hand, Ctrl-C to finish\n')
+        self.started = time.monotonic()
+        print(f'\n  listening on {ODOM_TOPIC} -- move the robot by hand, Ctrl-C to finish\n',
+              flush=True)
 
     def stop(self):
         self.done = True
@@ -106,7 +115,21 @@ class OdomCheck(Node):
                 f'   ({self.count} msgs)')
 
     def report(self):
-        print(self.line(), end='\r', flush=True)
+        if self.tty:
+            print(self.line(), end='\r', flush=True)
+            return
+        if self.first is None:
+            return
+        # Redirected: emit only when the reading has moved enough to be worth a
+        # line, so a long quiet window does not bury the interesting part.
+        now = (round(self.last[0] - self.first[0], 3),
+               round(self.last[1] - self.first[1], 3),
+               round(math.degrees(self.unwrapped_yaw), 1))
+        if self.last_printed is None or any(
+                abs(a - b) >= t for a, b, t in
+                zip(now, self.last_printed, (0.01, 0.01, 1.0))):
+            print(f'  [{time.monotonic() - self.started:5.1f}s]{self.line()}', flush=True)
+            self.last_printed = now
 
 
 def main():
