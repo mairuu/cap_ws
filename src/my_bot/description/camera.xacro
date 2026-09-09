@@ -1,0 +1,90 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+    <!-- Logitech HD Webcam C615 (046d:082c) on /dev/video0, driven by
+         cam2image from ros-humble-image-tools, NOT usb_cam. Publishes /image
+         at 640x480, RELIABLE QoS.
+
+         THIS FILE IS THE CAMERA EXTRINSICS. Decision D-10: the semantic node
+         looks up base_link -> camera_optical_link from TF rather than reading
+         camera.dx/dy/yaw out of a params file, so this joint origin is the
+         single source and there is no second copy to drift against. The old
+         board's robot_params.yaml did carry those numbers and it did not
+         survive; nothing here is recovered from it.
+
+         MEASURED 2026-09-09 by tape measure, and expressed in the terms that
+         were actually measured (height above the FLOOR, distance from the
+         drive AXLE) exactly as lidar.xacro does, rather than as offsets from
+         the chassis box whose own dimensions are still unverified. The joint is
+         parented to chassis, so both properties add the base_link -> chassis
+         offset back in.
+
+         camera_link lands at (0.05, 0.03, 0.167) in base_link. -->
+
+    <!-- Height of the lens centre above the floor. The lidar sits at 0.22, so
+         the camera is 2 cm BELOW the scan plane: an object the camera sees
+         near the top of frame can be above the plane the lidar measures, and
+         the semantic layer takes its range from that plane. -->
+    <xacro:property name="camera_height_above_ground" value="0.20"/>
+    <!-- Distance from the drive axle, POSITIVE FORWARD. The lidar is 0.034
+         BEHIND the axle, so the camera is 8.4 cm in front of the lidar, which
+         matches how it is physically mounted. Note this puts it ~1 cm proud of
+         the chassis front edge (base_link x = +0.040), but that edge is
+         derived from the unverified chassis_length, not measured, so the
+         camera position is the more trustworthy of the two. -->
+    <xacro:property name="camera_offset_from_axle" value="0.05"/>
+    <!-- Lateral offset from the robot centreline, POSITIVE LEFT (REP-103).
+         MAGNITUDE MEASURED (3 cm), SIDE ASSUMED LEFT. If the camera is
+         actually right of centre this must become -0.03. The error is small
+         and constant, so it will not look like a bug: every landmark lands
+         6 cm to one side, which reads as calibration slop rather than a sign
+         error. Confirm by eye before Day 6 and correct here, not downstream. -->
+    <xacro:property name="camera_offset_y" value="0.03"/>
+    <!-- Mount tilt, in radians, POSITIVE NOSE-DOWN. Measured ~3 degrees UP,
+         hence negative: a rotation of +p about +y sends the x-axis toward -z.
+         Getting this backwards points the camera at the floor 6 degrees off
+         and biases every projected range. -->
+    <xacro:property name="camera_pitch" value="${-3.0 * pi / 180.0}"/>
+
+    <xacro:property name="camera_offset_x" value="${wheel_offset_x + camera_offset_from_axle}"/>
+    <xacro:property name="camera_offset_z" value="${wheel_offset_z + camera_height_above_ground - wheel_radius}"/>
+
+    <!-- The MOUNT frame: x forward, y left, z up, like every other body frame
+         on the robot. Use this one for anything mechanical. -->
+    <joint name="camera_joint" type="fixed">
+        <parent link="chassis"/>
+        <child link="camera_link"/>
+        <origin xyz="${camera_offset_x} ${camera_offset_y} ${camera_offset_z}"
+                rpy="0 ${camera_pitch} 0"/>
+    </joint>
+
+    <link name="camera_link">
+        <visual>
+            <geometry>
+                <box size="0.024 0.068 0.029"/>
+            </geometry>
+            <material name="black"/>
+        </visual>
+        <!-- No collision and no inertial: the camera is a few tens of grams on
+             a bracket, and giving it a collision box would let it clip the
+             costmap footprint for no gain. -->
+    </link>
+
+    <!-- The OPTICAL frame: z forward, x right, y down, per REP-103. This is the
+         one image geometry is expressed in, so it is the one the semantic
+         projection must look up. The -pi/2, 0, -pi/2 rotation below is the
+         standard mount->optical change of basis.
+
+         Mixing the two frames up is a SILENT 90-degree error: both exist, both
+         resolve, TF reports no gap, and landmarks simply appear along the wrong
+         axis. If bearings look rotated by a right angle, check which frame was
+         looked up before re-measuring anything. -->
+    <joint name="camera_optical_joint" type="fixed">
+        <parent link="camera_link"/>
+        <child link="camera_optical_link"/>
+        <origin xyz="0 0 0" rpy="${-pi/2} 0 ${-pi/2}"/>
+    </joint>
+
+    <link name="camera_optical_link"/>
+
+</robot>
