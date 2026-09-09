@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 ROS_DISTRO ?= humble
 
-.PHONY: build sim real slam nav explore rviz save-map yolo teleop teleop-nav udev ports lidar-deps clean
+.PHONY: build sim real slam nav explore rviz save-map yolo teleop teleop-nav udev ports net net-check lidar-deps clean
 
 # yolo_ros lives in the older dev_ws, not here, so its install has to be on the
 # path for `make yolo`. cap_ws is sourced after it and wins on the packages
@@ -155,6 +155,35 @@ teleop:
 teleop-nav:
 	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
 	ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r /cmd_vel:=/cmd_vel_teleop
+
+# One-time per machine: configure multi-machine ROS 2 over the phone hotspot.
+# Run it on the Jetson AND on any laptop that runs RViz or teleop.
+#
+# Sets ROS_DOMAIN_ID (42, deliberately not 0 -- see the script),
+# ROS_LOCALHOST_ONLY=0, and a Fast DDS profile that adds each machine as a
+# UNICAST initial peer. The hotspot is an access point and drops
+# client-to-client multicast; Fast DDS discovers by multicast by default, so
+# without this two machines that ping each other fine see none of each other's
+# topics. Re-run after any address change -- the hotspot hands out DHCP and
+# the peer list is literal:
+#   make net PEERS=172.20.10.2,172.20.10.7
+DOMAIN ?= 42
+PEERS  ?= 172.20.10.2,172.20.10.5
+net:
+	src/my_bot/scripts/setup_ros2_network.sh --domain $(DOMAIN) --peers $(PEERS)
+
+# Prove the link carries what the robot actually sends, before blaming RViz.
+# Publisher here, subscriber on the other machine:
+#   make net-check                                   # on the robot
+#   ./check_ros2_link.py --sub                       # on the laptop
+#
+# It sends a 10 Hz String AND a 162x249 OccupancyGrid, the size of our real
+# /map. Those fail for different reasons: no String at all is a discovery
+# problem, String-but-no-grid is UDP fragmentation and needs bigger socket
+# buffers. A plain talker/listener test passes straight through the second one.
+net-check:
+	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
+	src/my_bot/scripts/check_ros2_link.py --pub
 
 # One-time setup: build the YDLidar stack from source. NEITHER piece is an apt
 # package, and without them there is no /scan at all -- `make real` defaults to
