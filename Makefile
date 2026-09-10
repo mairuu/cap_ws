@@ -152,9 +152,22 @@ teleop:
 # between stopping the robot and making it worse.
 #
 # Press k (or anything with zero velocity) to stop. Hold the terminal focused.
+#
+# SPEED defaults to 0.10 m/s, NOT teleop_twist_keyboard's own 0.5. That default
+# is what smeared the Day 3 map: the X2 sweeps 360 deg in ~86 ms and
+# slam_toolbox does not deskew, so at 0.5 m/s every scan is sheared 8.7 cm along
+# the path and no rigid transform can absorb it. The same floor mapped clean at
+# 0.10. Nav2 itself drives at 0.055 (nav2_params.yaml is the only clamp there).
+#
+# This does NOT weaken the e-stop -- `k` sends a zero Twist whatever SPEED is.
+# Override for a deliberate fast reposition on an already-built map:
+#   make teleop-nav SPEED=0.3
+SPEED ?= 0.10
+TURN  ?= 0.5
 teleop-nav:
 	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
-	ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r /cmd_vel:=/cmd_vel_teleop
+	ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r /cmd_vel:=/cmd_vel_teleop \
+	  -p speed:=$(SPEED) -p turn:=$(TURN)
 
 # One-time per machine: configure multi-machine ROS 2 over the phone hotspot.
 # Run it on the Jetson AND on any laptop that runs RViz or teleop.
