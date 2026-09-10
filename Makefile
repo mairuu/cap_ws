@@ -95,11 +95,19 @@ rviz: build
 
 # Write the map slam_toolbox currently holds to disk, as <MAP>.pgm + <MAP>.yaml.
 # Run while the mapper is still up.  make save-map MAP=~/maps/lab
+#
+# SAVE_TIMEOUT is not decoration. map_saver_cli defaults to 2 s and gives up
+# with "Failed to spin map subscription" -- which reads exactly like a dead
+# mapper, and is not. /map is latched TRANSIENT_LOCAL, so a fresh subscriber
+# must be sent the whole grid on connect, and a room-sized map does not arrive
+# in 2 s. Seen 10 Sep on a 255x557 map; 60 s saved it first try.
 MAP ?= $(HOME)/my_map
+SAVE_TIMEOUT ?= 60.0
 save-map:
 	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
 	source install/setup.bash && \
-	ros2 run nav2_map_server map_saver_cli -f $(MAP)
+	ros2 run nav2_map_server map_saver_cli -f $(MAP) \
+	  --ros-args -p save_map_timeout:=$(SAVE_TIMEOUT)
 
 # YOLO detection off the USB webcam. Publishes /yolo/detections and
 # /yolo/tracking (yolo_msgs/DetectionArray) plus /yolo/dbg_image.
