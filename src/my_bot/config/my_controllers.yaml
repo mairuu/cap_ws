@@ -25,10 +25,30 @@ diff_cont:
 
     # Must equal 2 * wheel_offset_y in description/robot_core.xacro.
     #
-    # Recovered value was 0.25, measured contact-patch to contact-patch. This
-    # 0.25168 was applied by hand on 9 Sep and ITS PROVENANCE IS NOT RECORDED --
-    # it is not the 0.25154 the one logged spin run implies, and the direction
-    # of that run was never noted. See records/calibration.md.
+    # Recovered value was 0.25, measured contact-patch to contact-patch.
+    #
+    # PROVENANCE RECOVERED 10 Sep -- this was flagged as unrecorded and it is
+    # not. calibrate_correct.py computes new_sep = sep * odom/(odom + residual),
+    # which is one-parameter, so the installed value can be inverted:
+    #
+    #     0.25 * 3600.32 / (3600.32 - 24.0) = 0.2516777  -> 0.25168  (installed)
+    #     0.25 * 3600.32 / (3600.32 - 22.0) = 0.2515370  -> 0.25154  (in STATE)
+    #
+    # Same 9 Sep spin run, same odom reading of 3600.32 deg, same installed
+    # 0.25. The two figures differ only in the floor residual being read as
+    # -24 deg when the value was applied and -22 deg when it was written down.
+    # Nothing else fits either number.
+    #
+    # KEPT AT 0.25168 rather than churned to 0.25154: the gap is 0.14 mm,
+    # 0.056 %, worth 0.05 deg of yaw over a 90 deg turn and 0.20 deg over a full
+    # rotation -- far below the precision of reading a chalk mark off a floor
+    # after ten turns. Moving it would be recording noise as a calibration,
+    # the same reason wheel_radius was left at 0.0327 on the same day.
+    #
+    # What IS resolved is that 0.25 is wrong: both readings put the separation
+    # 0.61-0.67 % high, which is 2.2-2.4 deg of yaw error per full turn. The
+    # correction is real; the fifth decimal place is not. See
+    # records/calibration.md.
     #
     # NOTE the straight-line run of 9 Sep does NOT test this number. In a spin
     # the wheels counter-rotate, so a per-wheel radius error cancels in yaw and

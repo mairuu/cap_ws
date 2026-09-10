@@ -28,8 +28,9 @@
          wheel_separation in config/my_controllers.yaml. Change one and you must
          change the other, or odometry yaw drifts.
          Raised to 0.12584 on 9 Sep to match wheel_separation 0.25168. The
-         pairing is correct, but see my_controllers.yaml: that separation
-         figure's provenance is not recorded. -->
+         pairing is correct, and that separation figure's provenance was
+         recovered on 10 Sep -- it is the 9 Sep spin run with the floor
+         residual read as -24 deg. See my_controllers.yaml. -->
     <xacro:property name="wheel_offset_y" value="0.12584"/>
     <xacro:property name="wheel_offset_z" value="0.01"/>
     <!-- MEASURED: 38 mm, which is LARGER than the 34 mm drive wheels. The
