@@ -1,0 +1,390 @@
+# Nav2 parameters for my_bot.
+#
+# Derived from nav2_bringup's nav2_params.yaml (Humble 1.1.x) with this robot's
+# real geometry and conservative speeds. Deltas from upstream are marked TUNED.
+#
+# NO amcl AND NO map_server HERE ON PURPOSE. slam_toolbox owns map -> odom and
+# publishes /map; adding either of those puts a second publisher on the map ->
+# odom edge and the robot's pose visibly jumps. See the FRAMES note in
+# mapper_params_online_async.yaml.
+#
+# ---------------------------------------------------------------------------
+# FOOTPRINT: base_link is NOT the centre of this robot.
+#
+# base_link sits on the wheel axle, but the chassis is mounted well behind it
+# (chassis_joint origin is -wheel_offset_x = -0.255 in robot_core.xacro), so the
+# body extends much further back than forward:
+#
+#     x: -0.255 (rear)  ..  +0.040 (front)     <- chassis box in base_link
+#     y: +/-0.139                              <- WHEEL outer faces, not the
+#                                                 0.105 chassis half-width;
+#                                                 the wheels stick out
+#
+# With ~1 cm margin that gives the polygon below. The REAR bound is measured and
+# tight. The FRONT bound is deliberately left at +0.09, well beyond the derived
+# +0.040: chassis_length is still an unverified 0.295, so the front edge is the
+# one number here that could move, and over-reserving in front is the safe
+# direction to be wrong. Tighten it once the chassis box is measured.
+#
+# THE CASTER IS NOT A CONSTRAINT, checked 10 Sep. It hangs off `chassis`, not
+# base_link, so its centre is at -0.255 + 0.075 = -0.180 and its forward tip at
+# -0.142 -- 12 cm inside the rear bound and nowhere near the front edge. Worth
+# stating because caster_wheel_offset_x reads "+0.075" and looks like a forward
+# overhang until you notice its parent link.
+#
+# Do NOT replace this with robot_radius: a circle enclosing this shape needs
+# r=0.30, roughly double the true half-width, and the robot would then refuse
+# doorways it physically fits through. If you ever do switch to a circle, delete the footprint key -- when
+# both are set, footprint wins and robot_radius is silently ignored.
+# ---------------------------------------------------------------------------
+#
+# SPEEDS: max_vel_x 0.055 / max_vel_theta 0.125, with the velocity_smoother
+# clamped to the same pair. Nothing downstream clamps them -- diff_cont sets no
+# limits and hardware/diffdrive_serial.cpp passes commands straight to the ESP32
+# -- so these params are the only speed limit the robot has. Raise them only
+# after watching it drive.
+#
+# CORRECTED 10 Sep: this note previously quoted "max_vel_x 0.22 / max_vel_theta
+# 1.0" as our values. Those are UPSTREAM's defaults; the file was cut ~4x below
+# them and the header was never updated. The per-key TUNED comments in
+# FollowPath are the ones that were kept current -- trust the VALUES, and the
+# comments sitting next to them, over this header. (Same failure as the encoder
+# -split comment in ros2_control.xacro: see reference/nvme-recovery-audit.md.)
+
+bt_navigator:
+  ros__parameters:
+    use_sim_time: false
+    global_frame: map
+    robot_base_frame: base_link
+    odom_topic: /diff_cont/odom
+    bt_loop_duration: 10
+    default_server_timeout: 20
+    plugin_lib_names:
+      - nav2_compute_path_to_pose_action_bt_node
+      - nav2_compute_path_through_poses_action_bt_node
+      - nav2_smooth_path_action_bt_node
+      - nav2_follow_path_action_bt_node
+      - nav2_spin_action_bt_node
+      - nav2_wait_action_bt_node
+      - nav2_assisted_teleop_action_bt_node
+      - nav2_back_up_action_bt_node
+      - nav2_drive_on_heading_bt_node
+      - nav2_clear_costmap_service_bt_node
+      - nav2_is_stuck_condition_bt_node
+      - nav2_goal_reached_condition_bt_node
+      - nav2_goal_updated_condition_bt_node
+      - nav2_globally_updated_goal_condition_bt_node
+      - nav2_is_path_valid_condition_bt_node
+      - nav2_initial_pose_received_condition_bt_node
+      - nav2_reinitialize_global_localization_service_bt_node
+      - nav2_rate_controller_bt_node
+      - nav2_distance_controller_bt_node
+      - nav2_speed_controller_bt_node
+      - nav2_truncate_path_action_bt_node
+      - nav2_truncate_path_local_action_bt_node
+      - nav2_goal_updater_node_bt_node
+      - nav2_recovery_node_bt_node
+      - nav2_pipeline_sequence_bt_node
+      - nav2_round_robin_node_bt_node
+      - nav2_transform_available_condition_bt_node
+      - nav2_time_expired_condition_bt_node
+      - nav2_path_expiring_timer_condition
+      - nav2_distance_traveled_condition_bt_node
+      - nav2_single_trigger_bt_node
+      - nav2_goal_updated_controller_bt_node
+      - nav2_is_battery_low_condition_bt_node
+      - nav2_navigate_through_poses_action_bt_node
+      - nav2_navigate_to_pose_action_bt_node
+      - nav2_remove_passed_goals_action_bt_node
+      - nav2_planner_selector_bt_node
+      - nav2_controller_selector_bt_node
+      - nav2_goal_checker_selector_bt_node
+      - nav2_controller_cancel_bt_node
+      - nav2_path_longer_on_approach_bt_node
+      - nav2_wait_cancel_bt_node
+      - nav2_spin_cancel_bt_node
+      - nav2_back_up_cancel_bt_node
+      - nav2_assisted_teleop_cancel_bt_node
+      - nav2_drive_on_heading_cancel_bt_node
+
+# bt_navigator spawns these two internal rclcpp nodes for its action clients.
+# They are separate ROS nodes with their own clocks, and nav2_bringup's
+# RewrittenYaml only rewrites use_sim_time for sections that ALREADY exist in
+# this file -- it does not create missing ones. Omit these and, in simulation,
+# the BT's action clients run on wall time while everything else runs on
+# /clock; goals then time out for no visible reason. Harmless on the real robot.
+bt_navigator_navigate_through_poses_rclcpp_node:
+  ros__parameters:
+    use_sim_time: false
+
+bt_navigator_navigate_to_pose_rclcpp_node:
+  ros__parameters:
+    use_sim_time: false
+
+controller_server:
+  ros__parameters:
+    use_sim_time: false
+    # TUNED: upstream 20.0. The Jetson also runs slam_toolbox and (optionally)
+    # TensorRT YOLO. 10 Hz is plenty for a robot capped at 0.22 m/s and leaves
+    # headroom. If the controller logs "control loop missed its desired rate",
+    # lower this before touching anything else.
+    controller_frequency: 10.0
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.5
+    min_theta_velocity_threshold: 0.001
+    failure_tolerance: 0.3
+    # diff_cont publishes odometry on /diff_cont/odom, NOT /odom, so this must
+    # be set or DWB sees no velocity feedback and believes the robot is always
+    # stationary. You will not find odom_topic in nav2's reference params or in
+    # controller_server.cpp: it is declared lazily by nav_2d_utils::
+    # OdomSubscriber. It is honoured. Do not delete it as "not a real param".
+    odom_topic: /diff_cont/odom
+    progress_checker_plugin: "progress_checker"
+    goal_checker_plugins: ["general_goal_checker"]
+    controller_plugins: ["FollowPath"]
+
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 0.5
+      # SCALED WITH SPEED. This asks the robot to cover 0.5 m within the
+      # allowance or navigation aborts. At the old 0.22 m/s that was a
+      # 2.3 s job with 10 s of slack; at 0.055 m/s it takes 9.1 s, so 10 s
+      # left almost no margin and any cornering would have tripped it.
+      # Keep this >= 4x the time 0.5 m actually takes.
+      movement_time_allowance: 40.0
+
+    general_goal_checker:
+      stateful: True
+      plugin: "nav2_controller::SimpleGoalChecker"
+      # TUNED: upstream 0.25/0.25. This robot is only ~0.3 m long and is asked
+      # to stop at frontier goals, where over-tight tolerances cause endless
+      # nudging. Loose enough to settle, tight enough to be useful.
+      xy_goal_tolerance: 0.15
+      yaw_goal_tolerance: 0.25
+
+    FollowPath:
+      plugin: "dwb_core::DWBLocalPlanner"
+      debug_trajectory_details: True
+      # --- velocity limits: see SPEEDS note at the top of this file ---
+      min_vel_x: -0.025       # slow reverse allowed; the X2 is 360 deg so the
+                              # costmap does see what is behind the robot
+      max_vel_x: 0.055
+      min_vel_y: 0.0
+      max_vel_y: 0.0          # differential drive: no sideways motion, ever
+      # TUNED DOWN from 1.0. This is a SLAM limit, not a comfort limit. The
+      # YDLidar sweeps at 10 Hz, so one scan takes 100 ms, and every ray in it
+      # is taken at a different robot heading. slam_toolbox does not deskew.
+      # At 1.0 rad/s the robot turned 5.7 deg during a single sweep, which
+      # smears a wall 4 m away by 40 cm -- and a 40 cm smear on an 0.05 m grid
+      # is exactly the "wall drawn twice, offset" artefact. At 0.5 it is 20 cm,
+      # at 0.3 about 12 cm. Lower this further before you lower max_vel_x;
+      # linear motion barely contributes to this error.
+      max_vel_theta: 0.125
+      min_speed_xy: -0.025
+      max_speed_xy: 0.055
+      min_speed_theta: 0.0
+      # Accelerations scaled by the same 4x. Left at the old values the robot
+      # would reach its (now tiny) top speed in 0.1 s, which is a snap that
+      # breaks the wheels loose -- and slipped wheels are odom error that scan
+      # matching cannot predict.
+      acc_lim_x: 0.125
+      acc_lim_y: 0.0
+      # TUNED DOWN from 2.0. A hard yaw snap breaks the wheels loose, and
+      # slipped wheels are encoder counts with no ground motion -- odom yaw
+      # error that no amount of scan matching can predict.
+      acc_lim_theta: 0.25
+      decel_lim_x: -0.125
+      decel_lim_y: 0.0
+      decel_lim_theta: -0.25
+      vx_samples: 20
+      vy_samples: 1           # must be >=1 even though max_vel_y is 0
+      vtheta_samples: 40
+      # RAISED from 1.5 with the speed cut. DWB rolls trajectories forward for
+      # this long, so the lookahead DISTANCE is sim_time * max_vel_x. At 1.5 s
+      # and 0.055 m/s that is 8 cm -- less than the robot's own length, and the
+      # planner goes blind to anything further ahead than its own front bumper.
+      # 5.0 s restores roughly the 30 cm horizon it had at the old speed.
+      sim_time: 5.0
+      linear_granularity: 0.05
+      angular_granularity: 0.025
+      transform_tolerance: 0.2
+      xy_goal_tolerance: 0.15
+      # SCALED. This is the "is it stopped yet" threshold for rotating in
+      # place at the goal. At 0.25 it sat 4x ABOVE the new top speed, so the
+      # robot counted as stopped while still driving at full tilt.
+      trans_stopped_velocity: 0.0625
+      short_circuit_trajectory_evaluation: True
+      stateful: True
+      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign",
+                "PathAlign", "PathDist", "GoalDist"]
+      BaseObstacle.scale: 0.02
+      PathAlign.scale: 32.0
+      PathAlign.forward_point_distance: 0.1
+      GoalAlign.scale: 24.0
+      GoalAlign.forward_point_distance: 0.1
+      PathDist.scale: 32.0
+      GoalDist.scale: 24.0
+      RotateToGoal.scale: 32.0
+      RotateToGoal.slowing_factor: 5.0
+      RotateToGoal.lookahead_time: -1.0
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      use_sim_time: false
+      update_frequency: 5.0
+      publish_frequency: 2.0
+      global_frame: odom
+      robot_base_frame: base_link
+      rolling_window: true
+      width: 3
+      height: 3
+      resolution: 0.05
+      # See FOOTPRINT note at the top of this file before editing.
+      footprint: "[[0.09, 0.147], [0.09, -0.147], [-0.265, -0.147], [-0.265, 0.147]]"
+      plugins: ["obstacle_layer", "inflation_layer"]
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        observation_sources: scan
+        scan:
+          topic: /scan
+          max_obstacle_height: 2.0
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+          raytrace_max_range: 12.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 10.0
+          obstacle_min_range: 0.0
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 3.0
+        # TUNED: upstream 0.55, which on a 0.29 m robot would inflate a typical
+        # 0.8 m doorway shut and make it unplannable. 0.25 clears the 0.147 m
+        # half-width with margin.
+        inflation_radius: 0.25
+      always_send_full_costmap: True
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      use_sim_time: false
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      global_frame: map
+      robot_base_frame: base_link
+      resolution: 0.05
+      track_unknown_space: true
+      # See FOOTPRINT note at the top of this file before editing.
+      footprint: "[[0.09, 0.147], [0.09, -0.147], [-0.265, -0.147], [-0.265, 0.147]]"
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: True
+        # slam_toolbox republishes the whole /map every map_update_interval
+        # (2.0 s), latched. The costmap grows with it, so the global plan can
+        # reach into space that did not exist when navigation started -- which
+        # is exactly what frontier exploration depends on.
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        observation_sources: scan
+        scan:
+          topic: /scan
+          max_obstacle_height: 2.0
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+          raytrace_max_range: 12.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 10.0
+          obstacle_min_range: 0.0
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.25
+      always_send_full_costmap: True
+
+planner_server:
+  ros__parameters:
+    use_sim_time: false
+    expected_planner_frequency: 1.0
+    planner_plugins: ["GridBased"]
+    GridBased:
+      plugin: "nav2_navfn_planner/NavfnPlanner"
+      tolerance: 0.5
+      use_astar: false
+      # TUNED: upstream false. MUST stay true for exploration -- frontier goals
+      # sit on the boundary between known and unknown, so with allow_unknown
+      # false every single explore_lite goal is rejected as unplannable and the
+      # robot just sits there.
+      allow_unknown: true
+
+smoother_server:
+  ros__parameters:
+    use_sim_time: false
+    smoother_plugins: ["simple_smoother"]
+    simple_smoother:
+      plugin: "nav2_smoother::SimpleSmoother"
+      tolerance: 1.0e-10
+      max_its: 1000
+      do_refinement: True
+
+behavior_server:
+  ros__parameters:
+    use_sim_time: false
+    costmap_topic: local_costmap/costmap_raw
+    footprint_topic: local_costmap/published_footprint
+    cycle_frequency: 10.0
+    behavior_plugins: ["spin", "backup", "drive_on_heading", "assisted_teleop", "wait"]
+    spin:
+      plugin: "nav2_behaviors/Spin"
+    backup:
+      plugin: "nav2_behaviors/BackUp"
+    drive_on_heading:
+      plugin: "nav2_behaviors/DriveOnHeading"
+    wait:
+      plugin: "nav2_behaviors/Wait"
+    assisted_teleop:
+      plugin: "nav2_behaviors/AssistedTeleop"
+    global_frame: odom
+    robot_base_frame: base_link
+    transform_tolerance: 0.1
+    simulate_ahead_time: 2.0
+    # Recovery rotation speed. Kept below DWB's max_vel_theta so a recovery
+    # spin is never the fastest the robot ever moves -- which matters more than
+    # it looks: recoveries fire exactly when the map is already confused, and a
+    # fast recovery spin is the single worst thing for scan matching. See the
+    # deskew note on max_vel_theta above.
+    max_rotational_vel: 0.1
+    min_rotational_vel: 0.05
+    rotational_acc_lim: 0.25
+
+waypoint_follower:
+  ros__parameters:
+    use_sim_time: false
+    loop_rate: 20
+    stop_on_failure: false
+    waypoint_task_executor_plugin: "wait_at_waypoint"
+    wait_at_waypoint:
+      plugin: "nav2_waypoint_follower::WaitAtWaypoint"
+      enabled: True
+      waypoint_pause_duration: 200
+
+velocity_smoother:
+  ros__parameters:
+    use_sim_time: false
+    smoothing_frequency: 20.0
+    scale_velocities: False
+    feedback: "OPEN_LOOP"
+    # Must not exceed DWB's limits above, or the smoother would hand the ESP32
+    # a faster command than the planner ever asked for.
+    max_velocity: [0.055, 0.0, 0.125]
+    min_velocity: [-0.025, 0.0, -0.125]
+    max_accel: [0.125, 0.0, 0.25]
+    max_decel: [-0.125, 0.0, -0.25]
+    odom_topic: "/diff_cont/odom"
+    odom_duration: 0.1
+    deadband_velocity: [0.0, 0.0, 0.0]
+    velocity_timeout: 1.0
