@@ -161,20 +161,33 @@ teleop:
 #
 # Press k (or anything with zero velocity) to stop. Hold the terminal focused.
 #
-# SPEED defaults to 0.10 m/s, NOT teleop_twist_keyboard's own 0.5. That default
-# is what smeared the Day 3 map: the X2 sweeps 360 deg in ~86 ms and
-# slam_toolbox does not deskew, so at 0.5 m/s every scan is sheared 8.7 cm along
-# the path and no rigid transform can absorb it. The same floor mapped clean at
-# 0.10. Nav2 itself drives at 0.055 (nav2_params.yaml is the only clamp there).
+# SPEED is the STARTING speed, 0.10 m/s rather than teleop_twist_keyboard's own
+# 0.5. That 0.5 is what smeared the Day 3 map: the X3 Pro sweeps 360 deg in
+# ~86 ms and slam_toolbox does not deskew, so at 0.5 m/s every scan is sheared
+# 8.7 cm along the path and no rigid transform can absorb it. The same floor
+# mapped clean at 0.10. Nav2 itself drives at 0.055.
 #
-# This does NOT weaken the e-stop -- `k` sends a zero Twist whatever SPEED is.
-# Override for a deliberate fast reposition on an already-built map:
-#   make teleop-nav SPEED=0.3
+# THE ACTUAL LIMIT IS NOT HERE. This publishes to /cmd_vel_teleop_raw, and
+# teleop_speed_guard (launched by navigation.launch.py, next to twist_mux)
+# clamps it onto /cmd_vel_teleop before twist_mux ever sees it. That is what
+# makes `q` harmless: teleop_twist_keyboard's q raises its speed PERMANENTLY
+# and shows the new value only in this terminal, which nobody watches while
+# looking at RViz, so a default alone does not prevent a ruined map.
+#
+# Raise the real limit deliberately, at launch, not with a keypress:
+#   make nav TELEOP_MAX_LINEAR:=0.3
+#
+# This does NOT weaken the e-stop -- `k` sends a zero Twist and the guard
+# passes zero through unclamped, at any limit.
+#
+# NOTE `make nav` must be running, or nothing subscribes to _raw and the robot
+# will not move at all. That is deliberate: the guard and twist_mux are one
+# safety chain and neither should run without the other.
 SPEED ?= 0.10
 TURN  ?= 0.5
 teleop-nav:
 	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
-	ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r /cmd_vel:=/cmd_vel_teleop \
+	ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r /cmd_vel:=/cmd_vel_teleop_raw \
 	  -p speed:=$(SPEED) -p turn:=$(TURN)
 
 # One-time per machine: configure multi-machine ROS 2 over the phone hotspot.

@@ -79,6 +79,8 @@ install(PROGRAMS
   # Day-3 lidar checks. Listen only; need the lidar driver but no TF.
   scripts/scan_dropout_report.py
   scripts/check_scan_bearing.py
+  # Sits in the e-stop path: launched by navigation.launch.py next to twist_mux.
+  scripts/teleop_speed_guard.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
