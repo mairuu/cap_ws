@@ -34,8 +34,8 @@ WHAT IT CHECKS
     against 676.30 from the 19 spanning 0.18-1.01 m -- 17.5% apart, with the
     narrow-depth group also throwing cx out to 391.7. Reprojection error saw
     none of it: the narrow group scored 0.15 px, the wide one 0.53.
-  * horizontal FOV implied by fx, against the C615's ~62 deg spec -- as a weak
-    smell test only. NOTE, because an earlier version of this file said the
+  * horizontal FOV implied by fx, against the ~51 deg MEASURED on this camera
+    -- a weak smell test only. NOTE, because an earlier version of this file said the
     opposite: HFOV does NOT detect a mis-scaled printout. fx is exactly
     invariant to square size (verified: seven significant figures across a 2.5x
     change in --square), so a badly printed board cannot move it. That also
@@ -72,7 +72,16 @@ import numpy as np
 import yaml
 
 GATE_PX = 0.5
-C615_HFOV_DEG = 62.0          # vendor spec, reference/hardware-inventory.md
+# MEASURED on this camera at 640x480, not a vendor figure. Two independent
+# estimates on 11 Sep agree: 50.9 deg from the focus-locked 80-image
+# calibration (fx 672.65), and 51.4 deg from camera_check_scale.py against a
+# tape measure (fx 664.85, regression slope 1.0117 over three distances).
+#
+# The "roughly 62 deg" that used to sit here came from reference/hardware-
+# inventory.md and was a pre-dump guess. It is wrong, and it fired this warning
+# on two good calibrations in a row. A vendor diagonal FOV quoted for a 16:9
+# mode does not survive the crop to 4:3 at 640x480.
+C615_HFOV_DEG = 51.0
 
 
 def load_tarball(path, prefix="left"):
@@ -141,6 +150,57 @@ def score(images, K, D, cols, rows, square_m):
     return overall, per_image, missed, depths
 
 
+def refit(images, cols, rows, square_m, size, keep):
+    """Recalibrate from scratch using only the named images.
+
+    NOT the default path. By default this script scores ost.yaml exactly as
+    cameracalibrator shipped it, which is the honest thing to report. --min-depth
+    opts into a refit, because the blurry close frames a locked focus produces
+    are worth excluding and recapturing is not: dropping everything under 0.30 m
+    from the 11 Sep run took the RMS 0.4414 -> 0.3395, moved fx 672.56 -> 668.10
+    (the tape says 664.85) and put cx back on the frame centre at 320.5.
+
+    Do not over-trim. Going on to 0.35 m gave a better RMS again (0.3156) but
+    pulled cx out to 308.4 -- the near views are what constrain the wide end of
+    the distortion model, and without enough of them the fit starts paying for
+    it with the principal point.
+    """
+    objp = np.zeros((rows * cols, 3), np.float32)
+    objp[:, :2] = np.mgrid[0:cols, 0:rows].T.reshape(-1, 2) * square_m
+    flags = cv2.CALIB_CB_ADAPTIVE_THRESH | cv2.CALIB_CB_NORMALIZE_IMAGE
+    term = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_MAX_ITER, 30, 0.01)
+
+    opts, ipts = [], []
+    for name, gray in images:
+        if name not in keep:
+            continue
+        found, corners = cv2.findChessboardCorners(gray, (cols, rows), flags=flags)
+        if not found:
+            continue
+        corners = cv2.cornerSubPix(gray, corners, (5, 5), (-1, -1), term)
+        opts.append(objp.copy())
+        ipts.append(corners)
+
+    if len(opts) < 8:
+        sys.exit("only %d images survive the depth cut -- too few to refit" % len(opts))
+
+    # CALIB_FIX_K3 to match the model cameracalibrator shipped, whose ost.yaml
+    # carries k3 = 0. Letting k3 float on a reduced image set is how you turn a
+    # trim into a different camera model: unconstrained it came out at -0.398,
+    # a large high-order term fitted from fewer near-edge views.
+    rms, K, dist, _, _ = cv2.calibrateCamera(opts, ipts, size, None, None,
+                                             flags=cv2.CALIB_FIX_K3)
+    D = dist.flat[:5].reshape(-1, 1)
+    # Match cameracalibrator: P comes from getOptimalNewCameraMatrix at alpha=0.
+    P3, _ = cv2.getOptimalNewCameraMatrix(K, D, size, 0)
+    P = np.hstack([P3, np.zeros((3, 1))])
+    return rms, K, D, P, len(opts)
+
+
+def as_matrix_field(a, rows, cols):
+    return {"rows": rows, "cols": cols, "data": [float(v) for v in np.ravel(a)]}
+
+
 def default_dest():
     """my_bot/config/c615_640x480.yaml in the SOURCE tree.
 
@@ -199,6 +259,12 @@ def main():
     ap.add_argument("--camera-name", default="c615")
     ap.add_argument("--force", action="store_true",
                     help="write even when the error is over the %.1f px gate" % GATE_PX)
+    ap.add_argument("--min-depth", type=float, default=None, metavar="METRES",
+                    help="REFIT excluding boards closer than this. A locked focus "
+                         "makes near boards soft and they carry most of the "
+                         "residual; 0.30 is the value that helped on this camera. "
+                         "Without it the script only scores what cameracalibrator "
+                         "already produced.")
     args = ap.parse_args()
 
     cols, rows = (int(v) for v in args.size.lower().split("x"))
@@ -234,6 +300,49 @@ def main():
               % (min(depths), max(depths), max(depths) / min(depths)))
     print()
 
+    if args.min_depth is not None:
+        keep = {n for (n, _, _), z in zip(per_image, depths) if z >= args.min_depth}
+        dropped = len(per_image) - len(keep)
+        size = (w, h)
+        rms2, K2, D2, P2, n2 = refit(images, cols, rows, args.square, size, keep)
+        print("REFIT excluding %d image(s) closer than %.2f m -- %d remain"
+              % (dropped, args.min_depth, n2))
+        info["camera_matrix"] = as_matrix_field(K2, 3, 3)
+        info["distortion_coefficients"] = as_matrix_field(D2, 1, 5)
+        info["projection_matrix"] = as_matrix_field(P2, 3, 4)
+        K, D = K2, D2
+        fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
+        # Score over the RETAINED images. Scoring a refit against frames it
+        # deliberately excluded reports how badly it explains blur we chose not
+        # to model, which reads as a regression when it is the opposite. The
+        # all-image figure is printed below as a held-out sanity check.
+        kept_images = [(n, g) for (n, g) in images if n in keep]
+        overall, per_image, missed, depths = score(
+            kept_images, K, D, cols, rows, args.square)
+        all_overall, _, _, _ = score(images, K, D, cols, rows, args.square)
+        hfov = 2.0 * np.degrees(np.arctan2(w / 2.0, fx))
+        vfov = 2.0 * np.degrees(np.arctan2(h / 2.0, fy))
+        print()
+        print("  fx %10.4f    cx %10.4f" % (fx, cx))
+        print("  fy %10.4f    cy %10.4f" % (fy, cy))
+        print("  D  %s" % np.ravel(D).tolist())
+        print()
+        print("  reprojection RMS   %.4f px   %s   (OpenCV's own: %.4f)"
+              % (overall, "PASS" if overall < GATE_PX else
+                 "FAIL (gate is < %.1f)" % GATE_PX, rms2))
+        print("  implied FOV        %.1f deg horizontal, %.1f deg vertical"
+              % (hfov, vfov))
+        if depths:
+            print("  board depth range  %.2f - %.2f m  (ratio %.1fx)"
+                  % (min(depths), max(depths), max(depths) / min(depths)))
+        print()
+        print("  over all %d images including the %d excluded: %.4f px"
+              % (len(images), dropped, all_overall))
+        print("  (expected to be higher -- those are the soft near frames)")
+        print()
+        print("  Verify the refit against a tape before installing it:  make calib-scale")
+        print()
+
     print("per image, worst first:")
     for name, rms, worst in sorted(per_image, key=lambda r: -r[1]):
         flag = "  <-- drop this one and re-run" if rms > 2.0 * overall else ""
@@ -260,7 +369,7 @@ def main():
             % (min(depths), max(depths)))
     if abs(hfov - C615_HFOV_DEG) > 8.0:
         problems.append(
-            "implied HFOV %.1f deg is far from the C615's ~%.0f deg spec.\n"
+            "implied HFOV %.1f deg is far from the %.0f deg measured on this camera.\n"
             "     This does NOT mean the printout is mis-scaled -- fx is invariant to\n"
             "     square size. It means fx itself may be wrong: suspect the depth spread\n"
             "     above, or the focus moving mid-capture. Settle it against a tape\n"
@@ -289,9 +398,12 @@ def main():
     print("| `cy` | **%.4f** |" % cy)
     print("| Distortion coefficients | `%s` |" % np.ravel(D).tolist())
     print("| **Reprojection error** | **%.4f px** (target < %.1f) |" % (overall, GATE_PX))
-    print("| Implied HFOV | %.1f deg (C615 spec ~%.0f deg) |" % (hfov, C615_HFOV_DEG))
+    print("| Implied HFOV | %.1f deg (measured ~%.0f deg on this camera) |" % (hfov, C615_HFOV_DEG))
     print("| Checkerboard | **%dx%d, %.0f mm** |" % (cols, rows, args.square * 1000.0))
-    print("| Images used | %d |" % len(per_image))
+    print("| Images used | %d%s |"
+          % (len(per_image),
+             "" if args.min_depth is None
+             else " (refit, boards closer than %.2f m excluded)" % args.min_depth))
     if depths:
         print("| Board depth range | %.2f – %.2f m (%.1f×) |"
               % (min(depths), max(depths), max(depths) / min(depths)))
