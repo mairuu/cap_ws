@@ -142,9 +142,12 @@ def board_depth(frames, K, D, cols, rows, square):
 def main():
     ap = argparse.ArgumentParser(
         description="Check the installed fx against a tape measure.")
-    ap.add_argument("--distances", default="0.4,0.7,1.0",
+    ap.add_argument("--distances", default="0.4,0.6,0.8,1.0,1.2,1.5",
                     help="comma-separated tape distances in METRES. Two or more "
-                         "cancels the entrance-pupil offset; one does not.")
+                         "cancels the entrance-pupil offset; one does not. The "
+                         "default sweeps six because precision goes as "
+                         "1/sqrt(sum((D-Dbar)^2)) -- three over 0.4-1.0 m gave "
+                         "only +/-2.6%, which is worse than the gate.")
     ap.add_argument("--config", default=None,
                     help="camera_info yaml (default: the installed c615_640x480.yaml)")
     ap.add_argument("--size", default="9x6", help="interior corners, COLSxROWS")
@@ -222,6 +225,7 @@ def main():
               % (d_i, z_i, z_i / d_i, sp_i * 1000.0, n_i))
     print()
 
+    se_pct = None
     if len(measured) >= 2:
         d = np.array([m[0] for m in measured])
         z = np.array([m[1] for m in measured])
@@ -233,6 +237,27 @@ def main():
         print("  residuals   %s mm" % np.round(resid * 1000.0, 1).tolist())
         print("  entrance-pupil offset absorbed by the intercept: %.1f mm"
               % (intercept * 1000.0))
+
+        # How well this run actually determines the slope. Without this the
+        # script reports a percentage to two decimals and invites you to believe
+        # all of them. SE(slope) = sigma / sqrt(Sxx): scatter over the SPREAD of
+        # the stations, so a wider sweep buys precision far faster than more
+        # frames at the same three distances do.
+        dof = len(measured) - 2
+        if dof >= 1:
+            sigma = float(np.sqrt(np.sum(resid ** 2) / dof))
+            sxx = float(np.sum((d - d.mean()) ** 2))
+            se_pct = 100.0 * (sigma / np.sqrt(sxx)) / slope
+            print("  scatter %.1f mm over a span of %.2f m  ->  "
+                  "SE(slope) = +/-%.2f%% (1 sigma, %d dof)"
+                  % (sigma * 1000.0, d.max() - d.min(), se_pct, dof))
+            if se_pct > 1.5:
+                print("  NOTE: this run cannot resolve fx better than about "
+                      "%.1f%%. Add stations and widen the span -- precision "
+                      "goes as 1/sqrt(sum((D - Dbar)^2)), so reaching further "
+                      "out helps more than repeating the near ones."
+                      % (2.0 * se_pct))
+
         if abs(intercept) > 0.05:
             print("  WARN: an intercept over 50 mm is not a lens offset. Suspect "
                   "an inconsistent measuring datum between distances.")
@@ -254,9 +279,24 @@ def main():
     print("  the config is %+.1f%% off" % err)
     print()
 
-    if abs(err) < 2.0:
-        print("  PASS. The calibration agrees with the tape. Record fx and the")
-        print("  slope in records/calibration.md and move on.")
+    # The threshold has to respect what this run can actually see. A fixed 2%
+    # gate on a measurement with a 2.6% standard error is theatre -- it was, on
+    # 11 Sep: two runs of three stations returned fx_true 664.87 and 672.36,
+    # 1.1% apart, and the fixed gate passed both while implying a precision
+    # neither had. Widen the gate to the data's own noise when the noise is the
+    # larger of the two, and say so.
+    tol = 2.0 if se_pct is None else max(2.0, 2.0 * se_pct)
+    if abs(err) < tol:
+        print("  PASS (tolerance %.1f%%%s). The calibration agrees with the tape"
+              % (tol, "" if se_pct is None or tol == 2.0
+                 else ", widened from 2.0%% to this run's 2 sigma"))
+        print("  as well as this run can tell. Record fx, the slope AND the")
+        print("  standard error in records/calibration.md -- the error is what")
+        print("  says how much of the agreement to believe.")
+        if se_pct is not None and abs(err) > 2.0:
+            print()
+            print("  Note that %.1f%% is inside the noise, not a measured" % abs(err))
+            print("  agreement at that level. Do not quote it as one.")
         return 0
 
     print("  FAIL. A %+.1f%% fx error is a %+.1f%% bearing error at the frame"
