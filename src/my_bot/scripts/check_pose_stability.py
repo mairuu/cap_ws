@@ -64,9 +64,12 @@ from sensor_msgs.msg import LaserScan
 # Exactly these three nodes may publish /tf on the real robot. Anything else is
 # the bug. robot_state_publisher owns the wheel joints (the fixed links go on
 # /tf_static), diff_cont owns odom -> base_link, slam_toolbox owns map -> odom.
+# Verified against the live graph 11 Sep: diff_drive_controller publishes /tf
+# under its OWN node name, not the controller_manager's, even though it runs
+# inside ros2_control_node.
 EXPECTED_TF_PUBLISHERS = {
     'robot_state_publisher',
-    'controller_manager',   # diff_cont lives inside ros2_control_node
+    'diff_cont',
     'slam_toolbox',
 }
 
@@ -189,7 +192,10 @@ class Watcher(Node):
         self.scan_last_stamp = stamp
         self.scan_timing.append((now, stamp))
         if self.scan_sweep is None and msg.scan_time > 0.0:
-            self.scan_sweep = msg.scan_time * max(1, len(msg.ranges) - 1)
+            # LaserScan.scan_time is already the FULL sweep period in seconds.
+            # time_increment is the per-ray figure. Multiplying the two together
+            # is a factor-of-350 error (caught 11 Sep: it reported a 30 s sweep).
+            self.scan_sweep = msg.scan_time
 
 
 def stats(values):
@@ -271,10 +277,13 @@ def main():
             base = n.split('/')[-1]
             mark = ''
             if c > 1:
-                mark = f'   <== {c} INSTANCES OF THE SAME NODE'
-                findings.append(
-                    f'{c} copies of {base} publish {topic}. Two stacks are '
-                    f'running. Kill every terminal and bring one up.')
+                # A node may hold several DDS writers on one topic and send on
+                # only one of them -- slam_toolbox does exactly this (measured
+                # 11 Sep: 2 endpoints, map -> odom still at exactly 50 Hz, which
+                # is 1/transform_publish_period, so one writer is idle). Endpoint
+                # count alone proves nothing. The per-edge section below is what
+                # decides, and `pgrep` settles whether two stacks are up.
+                mark = f'   <== {c} endpoints (see PER-EDGE before concluding)'
             elif topic == '/tf' and base not in EXPECTED_TF_PUBLISHERS:
                 mark = '   <== UNEXPECTED'
                 findings.append(
@@ -318,43 +327,56 @@ def main():
     print('=' * 68)
     print('MESSAGE TIMING  (stamp age and jitter, against this node\'s clock)')
     print('=' * 68)
-    for label, timing, backwards in (
-            (args.odom_topic, node.odom_timing, node.odom_backwards),
-            (args.scan_topic, node.scan_timing, node.scan_backwards)):
+    for label, timing, backwards, vs_timeout in (
+            (args.odom_topic, node.odom_timing, node.odom_backwards, False),
+            (args.scan_topic, node.scan_timing, node.scan_backwards, True)):
         if not timing:
             print(f'  {label}: NO MESSAGES')
             findings.append(f'{label} published nothing during the window.')
             continue
-        ages = [(recv - stamp) for recv, stamp in timing]
+        ages = sorted(recv - stamp for recv, stamp in timing)
         mean_age, sd_age, max_age = stats(ages)
+        p50 = ages[len(ages) // 2]
+        p99 = ages[min(len(ages) - 1, int(len(ages) * 0.99))]
         span = timing[-1][0] - timing[0][0]
         hz = (len(timing) - 1) / span if span > 0 else 0.0
         print(f'  {label}')
         print(f'      {len(timing)} msgs at {hz:.1f} Hz')
         print(f'      stamp age on arrival: mean {mean_age*1e3:7.1f} ms  '
-              f'sd {sd_age*1e3:5.1f} ms  max {max_age*1e3:7.1f} ms')
+              f'sd {sd_age*1e3:5.1f} ms')
+        print(f'      p50 {p50*1e3:6.1f} ms   p99 {p99*1e3:6.1f} ms   '
+              f'max {max_age*1e3:6.1f} ms')
         print(f'      stamps going backwards: {backwards}')
-        if max_age > TRANSFORM_TIMEOUT_S:
-            print(f'      <== EXCEEDS transform_timeout ({TRANSFORM_TIMEOUT_S} s); '
-                  f'slam_toolbox DROPS these')
+        # Judge on p99, not max. One outlier is a scheduling hiccup; a p99 past
+        # the timeout means scans are being discarded routinely.
+        if vs_timeout and p99 > TRANSFORM_TIMEOUT_S:
+            print(f'      <== p99 EXCEEDS transform_timeout '
+                  f'({TRANSFORM_TIMEOUT_S} s); slam_toolbox DROPS these')
             findings.append(
-                f'{label} peaked at {max_age*1e3:.0f} ms old, past the '
-                f'{TRANSFORM_TIMEOUT_S*1e3:.0f} ms transform_timeout. Those '
-                f'scans are discarded, so the matcher works from a gappy '
-                f'history and corrects hard when it does match.')
+                f'{label} is {p99*1e3:.0f} ms old at the 99th percentile, past '
+                f'the {TRANSFORM_TIMEOUT_S*1e3:.0f} ms transform_timeout. Those '
+                f'scans are discarded routinely, so the matcher works from a '
+                f'gappy history and corrects hard when it does match.')
+        elif vs_timeout and max_age > TRANSFORM_TIMEOUT_S:
+            print(f'      (max is past transform_timeout but p99 is not: '
+                  f'occasional hiccup, not a systemic drop)')
         if backwards:
             findings.append(
                 f'{label}: {backwards} messages stamped earlier than their '
                 f'predecessor. Either two publishers, or the clock stepped.')
-        if mean_age > 0 and sd_age > mean_age * 0.5 and len(timing) > 20:
+        # Jitter against the MEDIAN, and only when the spread is big in
+        # absolute terms. A 4 ms median with a couple of 300 ms outliers has a
+        # huge relative sd and is not a problem.
+        if len(timing) > 20 and (p99 - p50) > 0.050:
             findings.append(
-                f'{label} stamp age jitters by +/-{sd_age*1e3:.0f} ms around '
-                f'{mean_age*1e3:.0f} ms. The matcher is pairing scans with '
-                f'odom poses from the wrong instant.')
+                f'{label} spreads {(p99-p50)*1e3:.0f} ms between its median '
+                f'({p50*1e3:.0f} ms) and p99 ({p99*1e3:.0f} ms). The matcher '
+                f'pairs scans with odom poses from the wrong instant.')
     if node.scan_sweep:
         print(f'  /scan sweep duration: {node.scan_sweep*1e3:.0f} ms '
               f'(shear = sweep x speed; 0.5 m/s gives '
-              f'{node.scan_sweep*0.5*100:.1f} cm per scan)')
+              f'{node.scan_sweep*0.5*100:.1f} cm per scan, 0.10 m/s gives '
+              f'{node.scan_sweep*0.10*100:.1f} cm)')
     print()
 
     # --------------------------------------------------------- [3] map->odom
