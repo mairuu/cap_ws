@@ -44,6 +44,10 @@ ydlidar_ros2_driver_node:
     # laser_frame with identity rotation, so sim needs no equivalent. Do NOT
     # "fix" this by yawing laser_joint in description/lidar.xacro -- that file
     # is shared with sim and would break the sim scan instead.
+    # VERIFIED ON THIS BOARD 2026-09-11 with scripts/check_scan_bearing.py:
+    # an object placed in FRONT of the robot read +1.5 / -0.5 / +2.6 deg, i.e.
+    # ~0 deg. A wrong reversion would have put it at 180. Measured, not
+    # inherited -- this is the first check of either flag on this hardware.
     reversion: true
     # TRUE, and it must stay true. The X2 reports ray angles increasing
     # CLOCKWISE; ROS (REP-103) requires counter-clockwise-positive. This flag
@@ -62,6 +66,9 @@ ydlidar_ros2_driver_node:
     # SHOWS THIS -- it is a real-robot-only failure. Verify after any change
     # with scripts/check_scan_world_fixed.py: turn 90 degrees and the scan must
     # still overlap itself in the odom frame.
+    # VERIFIED ON THIS BOARD 2026-09-11, same script and session: an object at
+    # the robot's LEFT read +91.3 / +89.2 deg. A wrong inverted would have
+    # mirrored it to -90.
     inverted: true
     auto_reconnect: true
     support_motor_dtr: true
