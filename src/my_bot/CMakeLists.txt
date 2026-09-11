@@ -76,6 +76,9 @@ install(PROGRAMS
   # Day-2 gate checks. Neither commands motion; both need the ROS stack up.
   scripts/tf_check.py
   scripts/odom_check.py
+  # Listens only, but must be run WHILE DRIVING: it is a time series, not a
+  # snapshot, and rubber-banding is invisible in a snapshot.
+  scripts/check_pose_stability.py
   # Day-3 lidar checks. Listen only; need the lidar driver but no TF.
   scripts/scan_dropout_report.py
   scripts/check_scan_bearing.py
