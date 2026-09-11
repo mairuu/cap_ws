@@ -129,7 +129,16 @@ slam_toolbox:
     loop_match_minimum_response_fine: 0.45
 
     # Correlation Parameters - Correlation Parameters
-    correlation_search_space_dimension: 0.5
+    # TUNED 2026-09-11 (D-18): upstream 0.5, i.e. +/-25 cm of search around the
+    # odometry-predicted pose PER KEYFRAME. Keyframes are 0.2 m apart
+    # (minimum_travel_distance) and the odometry, after the 9-10 Sep
+    # corrections, is good to ~1 cm over that step. A window 25x the expected
+    # error lets the matcher slide along any plain wall, where the correlation
+    # ridge is flat, and land somewhere different at each keyframe -- that is
+    # the map->odom oscillation check_pose_stability.py flags. +/-15 cm is
+    # still 10x the error budget. The window must NOT be shrunk to the error
+    # budget itself: wheel slip on a tile edge has to stay recoverable.
+    correlation_search_space_dimension: 0.3
     correlation_search_space_resolution: 0.01
     correlation_search_space_smear_deviation: 0.1
 
@@ -139,13 +148,49 @@ slam_toolbox:
     loop_search_space_smear_deviation: 0.03
 
     # Scan Matcher Parameters
-    distance_variance_penalty: 0.5
-    angle_variance_penalty: 1.0
+    #
+    # HOW THESE WORK (verified in karto_sdk Mapper.cpp, slam_toolbox humble
+    # branch, ScanMatcher::CorrelateScan): every candidate pose's correlation
+    # score is multiplied by
+    #     1 - 0.2 * d^2 / p^2        (floored at minimum_distance_penalty)
+    # where d is the offset from the odometry-predicted pose and p is the value
+    # below -- the setter SQUARES it, so p is a standard deviation in metres,
+    # not a variance. The angle term has the same shape in radians. Then the
+    # best candidate is applied UNCONDITIONALLY (Mapper::Process ->
+    # SetSensorPose); there is no response gate on the sequential match.
+    #
+    # slam_toolbox never reads /diff_cont/odom. It takes odometry from the
+    # odom->base_footprint TF edge, so diff_cont's pose_covariance_diagonal has
+    # no effect here. THESE two numbers are the only "trust odometry" knob.
+    #
+    # TUNED 2026-09-11 (D-18): upstream 0.5 m / 1.0 rad gave a penalty of 0.95
+    # at the very edge of the old +/-25 cm window and 0.976 at +/-20 deg --
+    # i.e. odometry had effectively no vote. With 0.1 / 0.2: 5 cm off odom
+    # costs 5 %, 10 cm costs 20 %, 15 cm hits the 0.5 floor; 2.5 deg costs 1 %,
+    # 5.7 deg costs 5 %, 8 deg+ sits on the minimum_angle_penalty floor. The
+    # matcher can still fix real slip; it now needs a clearly better match to
+    # leave odometry's answer. Loop closure uses a separate matcher with
+    # doPenalize=false and is unaffected.
+    #
+    # If check_pose_stability.py still reports the correction travelling far
+    # more than it nets, the next step is distance_variance_penalty 0.05, not
+    # a wider window.
+    distance_variance_penalty: 0.1
+    angle_variance_penalty: 0.2
 
     fine_search_angle_offset: 0.00349
-    coarse_search_angle_offset: 0.349
+    # TUNED 2026-09-11 (D-18): upstream 0.349 (+/-20 deg). Per 0.2 rad keyframe
+    # the measured yaw error is ~0.01 deg (0.2 deg per full turn after the
+    # wheel_separation fix), and scan shear at the 0.5 rad/s teleop turn rate
+    # is 2.5 deg. +/-10 deg is still generous; +/-20 deg mostly gave a
+    # noisy 350-ray scan room to match the wrong wall.
+    coarse_search_angle_offset: 0.175
     coarse_angle_resolution: 0.0349
-    minimum_angle_penalty: 0.9
+    # TUNED 2026-09-11 (D-18): upstream 0.9. With angle_variance_penalty 0.2 the
+    # angle penalty reaches 0.9 at 8 deg; leaving the floor there would make
+    # 8 deg and 10 deg cost the same. 0.8 keeps the gradient out to the edge of
+    # the +/-10 deg window.
+    minimum_angle_penalty: 0.8
     minimum_distance_penalty: 0.5
     use_response_expansion: true
     min_pass_through: 2

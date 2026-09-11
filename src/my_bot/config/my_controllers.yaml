@@ -92,3 +92,34 @@ diff_cont:
 
     use_stamped_vel: false
 
+    # HARD VELOCITY CEILING -- added 2026-09-11 (D-18). This is the LAST clamp
+    # before the hardware, below twist_mux, below both teleops, below Nav2's
+    # recoveries (which bypass the velocity_smoother). Until now nothing capped
+    # speed during manual driving: teleop_twist_keyboard's `q` raises speed
+    # 10 % per press with no ceiling, and the 10 Sep Day-3 attempt smeared on
+    # straight sections after one such moment. At 0.5 m/s a scan shears 4.4 cm
+    # over the 89 ms sweep; at 0.10 m/s it is 0.9 cm.
+    #
+    # Odometry is NOT affected: these limit the wheel COMMANDS only; odom is
+    # integrated from encoder positions (position_feedback, default true;
+    # open_loop, default false -- both deliberately left at defaults).
+    #
+    # Nav2 never reaches these. velocity_smoother caps at 0.055 m/s and
+    # 0.125 rad/s, behavior_server.max_rotational_vel is 0.1 rad/s, so goal
+    # navigation and recoveries are unchanged. The ceiling exists for a
+    # human's hand on the keyboard, not for the planner.
+    #
+    # min_velocity must be given explicitly: the controller refuses to apply a
+    # limit with only max_velocity set ("Cannot apply velocity limits if
+    # max_velocity is not specified" is the matching error for the other case).
+    #
+    # pose_covariance_diagonal / twist_covariance_diagonal are deliberately NOT
+    # set. Nothing on this robot reads them -- slam_toolbox uses TF, Nav2
+    # ignores them -- and there is no EKF because there is no IMU.
+    linear.x.has_velocity_limits: true
+    linear.x.max_velocity: 0.15
+    linear.x.min_velocity: -0.15
+    angular.z.has_velocity_limits: true
+    angular.z.max_velocity: 0.5
+    angular.z.min_velocity: -0.5
+
