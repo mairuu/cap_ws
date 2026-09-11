@@ -58,17 +58,28 @@ slam_toolbox:
     # dropping message" warnings).
     map_update_interval: 2.0
     resolution: 0.05
-    # TUNED: upstream 0.0 / 20.0. Both now match what the YDLidar X2 actually
-    # reports in the scan message (range_min 0.1, range_max 12.0); rastering
-    # past 12 m only adds noise.
+    # TUNED: upstream 0.0 / 20.0. Both match what the YDLidar X3 Pro actually
+    # reports in the scan message (range_min 0.12, range_max 8.0); rastering
+    # past 8 m only adds noise.
+    #
+    # CORRECTED 2026-09-11 with the model. These read 0.1 / 12.0 until today,
+    # matching a ydlidar.yaml that described an X2 the robot does not have.
+    # 12.0 was the damaging half: the hardware returns 0.0 beyond its reach,
+    # 0.0 is indistinguishable from a true dropout, so four metres of
+    # non-existent range were being rastered as "no return".
     #
     # EXPECTED, IGNORE: on the first scan slam_toolbox logs
-    #   "minimum laser range setting (0.1 m) exceeds the capabilities of the
-    #    used Lidar (0.1 m)"
+    #   "minimum laser range setting (0.12 m) exceeds the capabilities of the
+    #    used Lidar (0.12 m)"
     # It compares this double against the message's float32 range_min, which
-    # widens to 0.10000000149, so 0.1 always looks smaller. It clamps to
-    # range_min either way -- the effective value is the one we want. Don't
-    # "fix" it by nudging this to 0.12; that just throws away 2 cm of range.
+    # widens slightly, so the configured value always looks smaller. It clamps
+    # to range_min either way -- the effective value is the one we want. The
+    # warning survives the correction because the float32 widening does, and it
+    # still means nothing.
+    #
+    # The old note here said don't nudge this to 0.12 because it "throws away
+    # 2 cm of range". That had it backwards: 0.12 IS the X3 Pro's rated
+    # minimum, and 0.1 was claiming 2 cm the sensor does not have.
     #
     # These do NOT handle the driver's invalid rays, which come back as 0.0
     # rather than +inf (invalid_range_is_inf: false in ydlidar.yaml). Karto
@@ -78,8 +89,8 @@ slam_toolbox:
     # zeroed, which mapped the room at its true size. If the map ever does grow
     # a solid ring of obstacles right at the robot, that is the assumption
     # breaking: flip invalid_range_is_inf to true rather than touching these.
-    min_laser_range: 0.1 #for rastering images
-    max_laser_range: 12.0 #for rastering images
+    min_laser_range: 0.12 #for rastering images
+    max_laser_range: 8.0 #for rastering images
     # TUNED: upstream 0.5. This is a hard floor on how often a scan can enter
     # the graph AT ALL, and during a turn it was the binding constraint, not
     # minimum_travel_heading below. At the old max_vel_theta of 1.0 rad/s,

@@ -1,4 +1,16 @@
-# YDLidar X2 driver config for the real robot.
+# YDLidar X3 Pro driver config for the real robot.
+#
+# MODEL CORRECTED 2026-09-11. Every document in this project said "X2" until
+# today; the unit is an X3 Pro, confirmed off the label. The SDK cannot tell you
+# this -- its YDLIDAR_MODLES enum contains no X2 and no X3 at all (X4 is the
+# only X-series entry), and the `Fail to get baseplate device information!`
+# error on every startup is exactly why: single-channel units do not answer the
+# device-info query, so di.model is never populated. There is no software route
+# to the model. Read the label.
+#
+# Upstream's X2.yaml and X3.yaml are byte-identical apart from key ordering, so
+# none of the transport settings below change with the model. What DOES change
+# is the physical spec: range and sample rate. Both were wrong here.
 #
 # Copied from ~/dev_ws/src/ydlidar_ros2_driver/params/ydlidar.yaml, which is
 # the standalone setup that was bench-tested. cap_ws owns this copy so the
@@ -23,7 +35,21 @@ ydlidar_ros2_driver_node:
     isSingleChannel: true
     intensity_bit: 0
     intensity: false
-    sample_rate: 3
+    # 4, not upstream's 3. The X3 Pro samples at ~4K; X2/X3 are 3K, and 3 was
+    # inherited along with the wrong model name.
+    #
+    # This parameter is INERT on a single-channel unit -- the SDK measures the
+    # rate at startup and overwrites whatever is configured (CYdLidar.cpp
+    # calcSampleRate, reached because the device-info query fails). It is set
+    # correctly anyway because it is the number a human reads when reasoning
+    # about ray counts, and 3K would give 3000/11.57 = 259 points per rev
+    # against the 350 actually delivered.
+    #
+    # MEASURED 2026-09-11: the SDK printed "Sample Rate: 4.57K". Subtract the
+    # +0.5 rounding term the code adds (m_SampleRate = count/scan_time/1000
+    # + 0.5) for a true ~4.07K. Cross-checks against the scan: 350 points/rev
+    # x 11.57 rev/s = 4050/s.
+    sample_rate: 4
     abnormal_check_count: 4
     fixed_resolution: true
     # TRUE: the puck is mounted with its 0 degree reference pointing at the
@@ -49,7 +75,7 @@ ydlidar_ros2_driver_node:
     # ~0 deg. A wrong reversion would have put it at 180. Measured, not
     # inherited -- this is the first check of either flag on this hardware.
     reversion: true
-    # TRUE, and it must stay true. The X2 reports ray angles increasing
+    # TRUE, and it must stay true. The X3 Pro reports ray angles increasing
     # CLOCKWISE; ROS (REP-103) requires counter-clockwise-positive. This flag
     # makes the SDK apply `angle = 2*pi - angle` (CYdLidar.cpp, "Is it counter
     # clockwise"), converting to the ROS convention.
@@ -74,12 +100,46 @@ ydlidar_ros2_driver_node:
     support_motor_dtr: true
     angle_max: 180.0
     angle_min: -180.0
-    range_max: 12.0
-    range_min: 0.1
+    # 8.0, the X3 Pro's rated maximum. It was 12.0, inherited with the wrong
+    # model name, and that error was NOT harmless: the hardware returns 0.0
+    # for anything it cannot reach, 0.0 is indistinguishable from a true
+    # dropout, and declaring 12 m meant every bearing with nothing inside 8 m
+    # was counted as a dropout inside the declared range. That is the direct
+    # cause of the dropout asymmetry recorded on 9 and 10 Sep -- see
+    # records/calibration.md.
+    #
+    # MEASURED, so the claim above is bounded honestly: an A/B in one spot on
+    # 11 Sep gave 19.0% dropout at range_max 8.0 against 19.5% at 12.0. In THIS
+    # room the change is worth nothing, because nothing in it is further than
+    # 6.3 m and so no bearing ever fell in the 8-12 m band. The correction is
+    # about being right where it matters -- a corridor, or the far wall of a
+    # larger room -- not about this measurement.
+    #
+    # Anything downstream that declares a range must not exceed this:
+    # mapper_params_online_async.yaml max_laser_range and nav2_params.yaml
+    # raytrace/obstacle_max_range are all pinned to it.
+    range_max: 8.0
+    # 0.12, the X3 Pro's rated minimum, raised from 0.1 in the same correction.
+    # Readings inside 0.12 m of laser_frame are within the robot's own
+    # footprint (half-width 0.147) in any case, so this discards the robot
+    # seeing itself rather than real obstacles.
+    range_min: 0.12
     frequency: 10.0
     # Invalid returns come back as 0.0 rather than +inf. That is BELOW
     # range_min, so consumers that only check for inf/nan will treat dropouts
-    # as obstacles 0 m away. Measured on the bench: ~50% of the 400 rays are
-    # 0.0 in an ordinary indoor room.
+    # as obstacles 0 m away.
+    #
+    # The old comment here claimed "~50% of the 400 rays". Both figures were
+    # wrong and neither was ever counted: it is 350 rays (the SDK prints
+    # "Single Fixed Size: 350", and that is MEASURED -- the mean points per
+    # revolution rounded to the nearest 10, not a configured value), and
+    # dropout measured 27.9% on 9 Sep, 25.7% on 10 Sep and ~19% on 11 Sep.
+    #
+    # DO NOT read that downward trend as the range_max fix working. All three
+    # were taken in different spots, and dropout is strongly position-dependent
+    # -- the worst sector has already moved from +75 deg LEFT to -15 deg AHEAD
+    # between two of them. The same-spot A/B at range_max 8.0 vs 12.0 differed
+    # by 0.5 points, which is inside the per-scan spread. Position dominates;
+    # only same-session A/B says anything about a parameter.
     invalid_range_is_inf: false
     debug: false

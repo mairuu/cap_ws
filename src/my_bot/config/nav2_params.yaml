@@ -253,9 +253,19 @@ local_costmap:
           clearing: True
           marking: True
           data_type: "LaserScan"
-          raytrace_max_range: 12.0
+          # CORRECTED 2026-09-11 from 12.0 / 10.0, which both exceeded the
+          # sensor. The lidar is a YDLidar X3 Pro rated to 8.0 m, not the X2
+          # every config claimed; it returns 0.0 beyond its reach and 0.0 is
+          # indistinguishable from a dropout, so the costmap was being told to
+          # trust and clear ranges the hardware cannot see.
+          #
+          # obstacle stays below raytrace, as it was before (10/12 -> 6.5/8):
+          # clear stale obstacles out to the sensor's limit, but only MARK
+          # within the range where the beam is still dense. At 8 m the 1.032
+          # deg ray spacing is 14 cm, so a chair leg falls between rays.
+          raytrace_max_range: 8.0
           raytrace_min_range: 0.0
-          obstacle_max_range: 10.0
+          obstacle_max_range: 6.5
           obstacle_min_range: 0.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
@@ -296,9 +306,19 @@ global_costmap:
           clearing: True
           marking: True
           data_type: "LaserScan"
-          raytrace_max_range: 12.0
+          # CORRECTED 2026-09-11 from 12.0 / 10.0, which both exceeded the
+          # sensor. The lidar is a YDLidar X3 Pro rated to 8.0 m, not the X2
+          # every config claimed; it returns 0.0 beyond its reach and 0.0 is
+          # indistinguishable from a dropout, so the costmap was being told to
+          # trust and clear ranges the hardware cannot see.
+          #
+          # obstacle stays below raytrace, as it was before (10/12 -> 6.5/8):
+          # clear stale obstacles out to the sensor's limit, but only MARK
+          # within the range where the beam is still dense. At 8 m the 1.032
+          # deg ray spacing is 14 cm, so a chair leg falls between rays.
+          raytrace_max_range: 8.0
           raytrace_min_range: 0.0
-          obstacle_max_range: 10.0
+          obstacle_max_range: 6.5
           obstacle_min_range: 0.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"

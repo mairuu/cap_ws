@@ -5,7 +5,7 @@ WHAT THIS IS FOR. config/ydlidar.yaml sets two orientation flags, both `true`:
 
     reversion: true    the puck's 0 deg reference faces the robot's REAR, so the
                        SDK adds pi to every bearing to undo it
-    inverted:  true    the X2 numbers its rays CLOCKWISE; REP-103 wants
+    inverted:  true    the X3 Pro numbers its rays CLOCKWISE; REP-103 wants
                        counter-clockwise, so the SDK applies angle = 2pi - angle
 
 Both values were recovered from the previous board. They describe how the lidar

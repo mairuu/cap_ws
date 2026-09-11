@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""Measure how many of the X2's rays come back empty, and which bearings are blind.
+"""Measure how many of the X3 Pro's rays come back empty, and which bearings are blind.
 
-The YDLidar X2 does not return a range for every ray. Indoors, on the bench,
-roughly HALF of them come back as 0.0 -- that figure is recorded in
-config/ydlidar.yaml, and this script is what re-derives it on a new board.
+The YDLidar X3 Pro does not return a range for every ray. This script is what
+measures how many, and at which bearings.
+
+THE FIGURE IN THE OLD DOCSTRING WAS WRONG TWICE. It said "roughly HALF" of
+"400 rays". It is 350 rays, and dropout measured 27.9% (9 Sep) then 25.7%
+(10 Sep). Both of those runs also had range_max set to 12.0 for a sensor rated
+to 8.0, so they counted every bearing with nothing between 8 and 12 m as a
+dropout. Re-measure now that range_max is honest; expect the figure to fall.
 
 WHY 0.0 AND NOT inf. ydlidar.yaml sets `invalid_range_is_inf: false`, so a
 dropout arrives as 0.0 rather than +inf. 0.0 is BELOW range_min, which means a
@@ -92,7 +97,7 @@ class DropoutReport(Node):
 
         self.seen = 0
         self.rays_total = 0
-        self.zero = 0             # exactly 0.0 -- the X2's dropout marker
+        self.zero = 0             # exactly 0.0 -- the X3 Pro's dropout marker
         self.below_min = 0        # >0 but under range_min
         self.non_finite = 0       # inf/nan, i.e. invalid_range_is_inf took effect
         self.above_max = 0
@@ -211,7 +216,7 @@ class DropoutReport(Node):
         print()
         print('  how the bad rays are marked:')
         print(f'    exactly 0.0        {self.zero}   '
-              '(the X2 dropout marker; BELOW range_min)')
+              '(the X3 Pro dropout marker; BELOW range_min)')
         print(f'    inf / nan          {self.non_finite}   '
               '(invalid_range_is_inf took effect)')
         print(f'    under range_min    {self.below_min}')
