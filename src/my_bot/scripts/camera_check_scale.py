@@ -194,14 +194,15 @@ def main():
                 continue
             z = float(np.median(zs))
             spread = float(np.max(zs) - np.min(zs))
-            measured.append((d, z))
+            measured.append((d, z, spread, len(zs)))
             print("  tape %.3f m  ->  model says %.4f m   (ratio %.4f, "
                   "spread over %d frames %.1f mm)"
                   % (d, z, z / d, len(zs), spread * 1000.0))
             if spread > 0.02:
-                print("  WARN: %.0f mm of spread across frames at one fixed "
-                      "distance. Autofocus hunting, or the board moved."
-                      % (spread * 1000.0))
+                print("  WARN: %.0f mm of spread at the %.3f m station. With the "
+                      "focus locked this is the board moving in your hands, not "
+                      "the lens -- the median absorbs it, but brace against "
+                      "something if it is large." % (spread * 1000.0, d))
     finally:
         node.destroy_node()
         rclpy.shutdown()
@@ -210,6 +211,17 @@ def main():
         sys.exit("\nno usable distances -- nothing measured")
 
     print()
+    # Repeat the raw pairs here, after the interactive prompts. Printed only as
+    # they were taken, they sit above the prompts in a redirected log and are
+    # the first thing lost when the head of the file is trimmed -- which is
+    # exactly what happened to the 11 Sep run's output.
+    print("measurements:")
+    print("  %-10s %-12s %-9s %s" % ("tape m", "model m", "ratio", "spread mm / n"))
+    for d_i, z_i, sp_i, n_i in measured:
+        print("  %-10.3f %-12.4f %-9.4f %.1f / %d"
+              % (d_i, z_i, z_i / d_i, sp_i * 1000.0, n_i))
+    print()
+
     if len(measured) >= 2:
         d = np.array([m[0] for m in measured])
         z = np.array([m[1] for m in measured])
@@ -225,7 +237,7 @@ def main():
             print("  WARN: an intercept over 50 mm is not a lens offset. Suspect "
                   "an inconsistent measuring datum between distances.")
     else:
-        d, z = measured[0]
+        d, z = measured[0][0], measured[0][1]
         slope = z / d
         fx_true = fx_cfg / slope
         print("ONE distance only -- the entrance-pupil offset goes straight into "
