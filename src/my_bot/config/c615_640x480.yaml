@@ -1,0 +1,26 @@
+# Logitech C615 intrinsics at 640x480.
+# Produced by camera_calibration/cameracalibrator, scored and
+# installed by my_bot/scripts/camera_calib_report.py.
+# The method, the date and the reprojection error are in
+# records/calibration.md. Do not hand-edit these numbers.
+image_width: 640
+image_height: 480
+camera_name: c615
+camera_matrix:
+  rows: 3
+  cols: 3
+  data: [714.62666, 0.0, 321.15096, 0.0, 718.00893, 241.41723, 0.0, 0.0, 1.0]
+distortion_model: plumb_bob
+distortion_coefficients:
+  rows: 1
+  cols: 5
+  data: [-0.066309, 0.159328, -0.000798, 0.00086, 0.0]
+rectification_matrix:
+  rows: 3
+  cols: 3
+  data: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+projection_matrix:
+  rows: 3
+  cols: 4
+  data: [710.29407, 0.0, 321.06775, 0.0, 0.0, 713.39032, 240.59975, 0.0, 0.0, 0.0,
+    1.0, 0.0]

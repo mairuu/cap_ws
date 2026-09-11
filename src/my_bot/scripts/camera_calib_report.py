@@ -26,11 +26,25 @@ WHAT IT CHECKS
   * the resolution in ost.yaml is the one we actually run (640x480). cam2image
     DEFAULTS TO 320x240, and a calibration captured at the default is silently
     wrong for the real pipeline: fx, fy, cx, cy all scale with resolution.
-  * horizontal FOV implied by fx, against the C615's ~62 deg spec. This is the
-    check that catches a mis-scaled printout, which reprojection error cannot:
-    a uniform square-size error is absorbed by the board distance and leaves the
-    residuals looking perfect. See make_checkerboard.py.
-  * cx, cy near the frame centre. Far off means too few corner samples.
+  * DEPTH SPREAD of the board across the images. This is the one that matters
+    and the one that caught the 11 Sep run. fx and board distance are nearly
+    degenerate when every view is at the same depth: the solver can trade one
+    against the other and still fit its own images beautifully. Splitting that
+    run by capture order gave fx 819.74 from the 29 frames at 0.70-1.23 m
+    against 676.30 from the 19 spanning 0.18-1.01 m -- 17.5% apart, with the
+    narrow-depth group also throwing cx out to 391.7. Reprojection error saw
+    none of it: the narrow group scored 0.15 px, the wide one 0.53.
+  * horizontal FOV implied by fx, against the C615's ~62 deg spec -- as a weak
+    smell test only. NOTE, because an earlier version of this file said the
+    opposite: HFOV does NOT detect a mis-scaled printout. fx is exactly
+    invariant to square size (verified: seven significant figures across a 2.5x
+    change in --square), so a badly printed board cannot move it. That also
+    means a badly printed board cannot corrupt any BEARING, since
+    atan((u - cx)/fx) carries no length either. Square size sets only the
+    board-distance scale. To test fx against the physical world you need an
+    independent length: camera_check_scale.py, a tape measure.
+  * cx, cy near the frame centre. Far off is the fingerprint of the degenerate
+    fit above -- the solver pays for a wrong fx by sliding the principal point.
 
 USAGE
 
@@ -101,7 +115,7 @@ def score(images, K, D, cols, rows, square_m):
     flags = cv2.CALIB_CB_ADAPTIVE_THRESH | cv2.CALIB_CB_NORMALIZE_IMAGE
     term = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_MAX_ITER, 30, 0.01)
 
-    per_image, missed, sq_sum, n_pts = [], [], 0.0, 0
+    per_image, missed, sq_sum, n_pts, depths = [], [], 0.0, 0, []
     for name, gray in images:
         found, corners = cv2.findChessboardCorners(gray, (cols, rows), flags=flags)
         if not found:
@@ -119,11 +133,12 @@ def score(images, K, D, cols, rows, square_m):
         sq = float(np.sum(err ** 2))
         per_image.append((name, float(np.sqrt(sq / len(err))), float(np.max(
             np.linalg.norm(err, axis=1)))))
+        depths.append(float(tvec[2]))
         sq_sum += sq
         n_pts += len(err)
 
     overall = float(np.sqrt(sq_sum / n_pts)) if n_pts else float("nan")
-    return overall, per_image, missed
+    return overall, per_image, missed, depths
 
 
 def default_dest():
@@ -197,7 +212,7 @@ def main():
     if not images:
         sys.exit("tarball has no images -- cannot score the reprojection error")
 
-    overall, per_image, missed = score(images, K, D, cols, rows, args.square)
+    overall, per_image, missed, depths = score(images, K, D, cols, rows, args.square)
     hfov = 2.0 * np.degrees(np.arctan2(w / 2.0, fx))
     vfov = 2.0 * np.degrees(np.arctan2(h / 2.0, fy))
 
@@ -214,6 +229,9 @@ def main():
     print("  reprojection RMS   %.4f px   %s"
           % (overall, "PASS" if overall < GATE_PX else "FAIL (gate is < %.1f)" % GATE_PX))
     print("  implied FOV        %.1f deg horizontal, %.1f deg vertical" % (hfov, vfov))
+    if depths:
+        print("  board depth range  %.2f - %.2f m  (ratio %.1fx -- want 2.5x or more)"
+              % (min(depths), max(depths), max(depths) / min(depths)))
     print()
 
     print("per image, worst first:")
@@ -232,12 +250,21 @@ def main():
             "resolution is %dx%d, but the robot runs cam2image at 640x480.\n"
             "     cam2image DEFAULTS to 320x240 -- pass -p width:=640 -p height:=480.\n"
             "     Intrinsics do not transfer across resolutions. Recapture." % (w, h))
+    if depths and max(depths) / min(depths) < 2.5:
+        problems.append(
+            "DEGENERATE CAPTURE: every board sits between %.2f m and %.2f m.\n"
+            "     fx and board distance are nearly interchangeable over a narrow depth\n"
+            "     range, so the solver can be badly wrong about fx and still fit these\n"
+            "     images perfectly -- reprojection error cannot see this. Recapture with\n"
+            "     the board swept from filling the frame to a small patch."
+            % (min(depths), max(depths)))
     if abs(hfov - C615_HFOV_DEG) > 8.0:
         problems.append(
             "implied HFOV %.1f deg is far from the C615's ~%.0f deg spec.\n"
-            "     Reprojection error will NOT catch a mis-scaled printout: a uniform\n"
-            "     square-size error is absorbed by the board distance. Measure a\n"
-            "     printed square with a steel rule and pass the real --square."
+            "     This does NOT mean the printout is mis-scaled -- fx is invariant to\n"
+            "     square size. It means fx itself may be wrong: suspect the depth spread\n"
+            "     above, or the focus moving mid-capture. Settle it against a tape\n"
+            "     measure:  make calib-scale"
             % (hfov, C615_HFOV_DEG))
     if abs(cx - w / 2.0) > 0.10 * w or abs(cy - h / 2.0) > 0.10 * h:
         problems.append(
@@ -265,6 +292,9 @@ def main():
     print("| Implied HFOV | %.1f deg (C615 spec ~%.0f deg) |" % (hfov, C615_HFOV_DEG))
     print("| Checkerboard | **%dx%d, %.0f mm** |" % (cols, rows, args.square * 1000.0))
     print("| Images used | %d |" % len(per_image))
+    if depths:
+        print("| Board depth range | %.2f – %.2f m (%.1f×) |"
+              % (min(depths), max(depths), max(depths) / min(depths)))
     print("| Method | `cam2image` 640x480 RELIABLE + `cameracalibrator "
           "--no-service-check`, scored by `camera_calib_report.py` |")
     print("--------------------------------------------------------------------")

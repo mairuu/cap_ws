@@ -89,6 +89,7 @@ install(PROGRAMS
   # the tarball cameracalibrator leaves in /tmp and installs config/.
   scripts/make_checkerboard.py
   scripts/camera_calib_report.py
+  scripts/camera_check_scale.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

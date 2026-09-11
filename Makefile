@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 ROS_DISTRO ?= humble
 
-.PHONY: build sim real slam nav explore rviz save-map yolo camera calib calib-report teleop teleop-nav udev ports net net-check viewer-sync lidar-deps clean
+.PHONY: build sim real slam nav explore rviz save-map yolo camera calib calib-report calib-scale teleop teleop-nav udev ports net net-check viewer-sync lidar-deps clean
 
 # yolo_ros lives in the older dev_ws, not here, so its install has to be on the
 # path for `make yolo`. cap_ws is sourced after it and wins on the packages
@@ -140,10 +140,34 @@ yolo: build
 # WIDTH/HEIGHT are not decoration. cam2image DEFAULTS TO 320x240, and intrinsics
 # do not transfer across resolutions -- fx, fy, cx and cy all scale. Calibrate
 # at the size the robot actually runs, which is what yolo.launch.py sets.
+# THE C615 IS AN AUTOFOCUS CAMERA AND AUTOFOCUS CHANGES fx. It is varifocal:
+# refocusing moves the lens, so the focal length -- the thing we are calibrating
+# -- is not a constant while `focus_automatic_continuous` is 1. Observed on this
+# board 11 Sep: focus_absolute was left at 51, AF was re-enabled, and the driver
+# had moved it to 85 by the next read, unprompted. A calibration captured across
+# that is a fit of one pinhole model to several different cameras, and worse, at
+# run time the lens keeps moving away from whatever was calibrated.
+#
+# So: lock it, and lock it to the SAME value for calibration and for the demo.
+# The two calls cannot be combined -- setting focus_absolute in the same
+# VIDIOC_S_EXT_CTRLS transaction that still has AF enabled is rejected outright.
+#
+# 51 is the device default. Pick a value that is sharp at the demo's working
+# distance and then do not touch it.   make camera FOCUS=auto   restores AF.
 CAM_WIDTH  ?= 640
 CAM_HEIGHT ?= 480
 CAM_FPS    ?= 15.0
+CAM_DEV    ?= /dev/video0
+FOCUS      ?= 51
 camera:
+	@if [ "$(FOCUS)" = "auto" ]; then \
+	  v4l2-ctl -d $(CAM_DEV) -c focus_automatic_continuous=1; \
+	  echo "AUTOFOCUS ON -- fx is not constant. Do not calibrate like this."; \
+	else \
+	  v4l2-ctl -d $(CAM_DEV) -c focus_automatic_continuous=0 && \
+	  v4l2-ctl -d $(CAM_DEV) -c focus_absolute=$(FOCUS) && \
+	  echo "focus locked at $(FOCUS)"; \
+	fi
 	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
 	ros2 run image_tools cam2image --ros-args \
 	  -p width:=$(CAM_WIDTH) -p height:=$(CAM_HEIGHT) \
@@ -171,6 +195,23 @@ calib-report: build
 	source install/setup.bash && \
 	ros2 run my_bot camera_calib_report.py \
 	  --size $(BOARD) --square $(SQUARE) --write
+
+# The check the calibration CANNOT do on itself. A chessboard fit has no
+# absolute length in it: scale the squares and the solver scales the board
+# distances and returns the same K. So reprojection error cannot see an fx that
+# is 15% wrong from a degenerate capture -- every board at the same depth lets
+# fx trade against distance freely, and the fit looks excellent.
+#
+# This puts the board at tape-measured distances and regresses what the model
+# thinks against what the tape says. Slope 1.000 means fx is right; the
+# intercept absorbs the entrance-pupil offset, which is why it wants more than
+# one distance. Needs `make camera` running in another terminal.
+DISTANCES ?= 0.4,0.7,1.0
+calib-scale: build
+	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
+	source install/setup.bash && \
+	ros2 run my_bot camera_check_scale.py \
+	  --size $(BOARD) --square $(SQUARE) --distances $(DISTANCES)
 
 # One-time setup: pin the ESP32 and the lidar to /dev/esp32 and /dev/ydlidar so
 # they stop trading ttyUSB numbers. Interactive -- run with BOTH plugged in.
