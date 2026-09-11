@@ -188,7 +188,7 @@ def main():
     print("wrote %s -- %dx%d interior corners, %g mm squares, %s"
           % (args.out, args.cols, args.rows, args.square, args.page))
     print()
-    print("  1. print at 100%% / Actual size. NOT fit-to-page.")
+    print("  1. print at 100% / Actual size. NOT fit-to-page.")
     print("  2. measure the 100 mm ruler. If it is not 100 mm, reprint.")
     print("  3. mount it flat and rigid, tape all four edges.")
     print("  4. cameracalibrator --size %dx%d --square %.3f"

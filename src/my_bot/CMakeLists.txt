@@ -84,6 +84,11 @@ install(PROGRAMS
   scripts/check_scan_bearing.py
   # Sits in the e-stop path: launched by navigation.launch.py next to twist_mux.
   scripts/teleop_speed_guard.py
+  # Day-4 camera intrinsics. Neither needs the robot or a ROS graph:
+  # make_checkerboard.py writes the print target, camera_calib_report.py scores
+  # the tarball cameracalibrator leaves in /tmp and installs config/.
+  scripts/make_checkerboard.py
+  scripts/camera_calib_report.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

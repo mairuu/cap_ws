@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 ROS_DISTRO ?= humble
 
-.PHONY: build sim real slam nav explore rviz save-map yolo teleop teleop-nav udev ports net net-check viewer-sync lidar-deps clean
+.PHONY: build sim real slam nav explore rviz save-map yolo camera calib calib-report teleop teleop-nav udev ports net net-check viewer-sync lidar-deps clean
 
 # yolo_ros lives in the older dev_ws, not here, so its install has to be on the
 # path for `make yolo`. cap_ws is sourced after it and wins on the packages
@@ -124,6 +124,53 @@ yolo: build
 	source $(DEV_WS)/install/setup.bash && \
 	source install/setup.bash && \
 	ros2 launch my_bot yolo.launch.py model:=$(MODEL)
+
+# Camera intrinsics -- Day 4 sec 4. Needs the camera and nothing else: no
+# robot, no lidar, no Nav2. Two terminals.
+#
+#   terminal 1:  make camera
+#   terminal 2:  make calib
+#   then:        make calib-report            (after pressing SAVE)
+#
+# The RECOVERY.md sketch of this target is WRONG on all four counts and is kept
+# there only as history: it says usb_cam, /camera/image_raw, 8x6 and 0.025. The
+# camera is cam2image on /image, and the board is 9x6 / 20 mm. See
+# reference/nvme-recovery-audit.md.
+#
+# WIDTH/HEIGHT are not decoration. cam2image DEFAULTS TO 320x240, and intrinsics
+# do not transfer across resolutions -- fx, fy, cx and cy all scale. Calibrate
+# at the size the robot actually runs, which is what yolo.launch.py sets.
+CAM_WIDTH  ?= 640
+CAM_HEIGHT ?= 480
+CAM_FPS    ?= 15.0
+camera:
+	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
+	ros2 run image_tools cam2image --ros-args \
+	  -p width:=$(CAM_WIDTH) -p height:=$(CAM_HEIGHT) \
+	  -p frequency:=$(CAM_FPS) -p reliability:=reliable \
+	  -p frame_id:=camera_link --log-level cam2image:=warn
+
+# --no-service-check is REQUIRED, not optional: cameracalibrator otherwise waits
+# for a set_camera_info service, and cam2image offers none, so it sits there
+# looking hung. For the same reason COMMIT does nothing -- press SAVE, which
+# writes /tmp/calibrationdata.tar.gz, and then run `make calib-report`.
+BOARD  ?= 9x6
+SQUARE ?= 0.020
+calib:
+	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
+	ros2 run camera_calibration cameracalibrator \
+	  --size $(BOARD) --square $(SQUARE) --no-service-check \
+	  -c c615 image:=/image
+
+# cameracalibrator computes the reprojection error and then throws it away
+# (calibrator.py:797) -- the number beside the CALIBRATE button is the LINEAR
+# error, which is not the gate. This recovers it from the saved tarball, per
+# image, and installs config/c615_640x480.yaml when it passes.
+calib-report: build
+	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
+	source install/setup.bash && \
+	ros2 run my_bot camera_calib_report.py \
+	  --size $(BOARD) --square $(SQUARE) --write
 
 # One-time setup: pin the ESP32 and the lidar to /dev/esp32 and /dev/ydlidar so
 # they stop trading ttyUSB numbers. Interactive -- run with BOTH plugged in.
