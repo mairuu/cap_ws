@@ -18,11 +18,17 @@ Lidar:
     LaserScan angles: angle_min → angle_max, step = angle_increment.
     Index i → angle = angle_min + i * angle_increment.
 
-Camera ↔ Lidar alignment assumption:
-    Both are mounted facing the same direction (forward).
-    The camera's horizontal centre ray aligns with lidar angle = 0.
-    A static TF offset (x, y, z) is handled upstream in the ROS node;
-    here we only deal with angular geometry.
+Camera ↔ Lidar sign convention -- READ THIS, it was wrong once:
+    pixel_to_azimuth() is IMAGE convention: right of centre is POSITIVE.
+    The lidar (and REP-103) is CCW-positive: the robot's LEFT is positive.
+    They are mirror images. The scan window for a bounding box is therefore
+        [ -az_right + camera_yaw,  -az_left + camera_yaw ]
+    in lidar angles. The June-era code searched the scan at the camera
+    azimuths directly, so a box on the image's right took its range from
+    the robot's left. No symmetric test can see that; test_mirror_* can.
+    camera_yaw is the mount's pan in base_link (from TF, CCW-positive), so
+    a camera panned left shifts the window to positive lidar angles.
+    The translation between camera and lidar is handled by the projector.
 """
 
 from __future__ import annotations
@@ -80,6 +86,7 @@ class BoundingBox:
     y2: float
     class_label: str = ""
     confidence: float = 1.0
+    track_id: str = ""        # tracker id from Detection2D.id; "" if none
 
     @property
     def center_u(self) -> float:
@@ -130,8 +137,10 @@ class RangeEstimate:
     azimuth_left: float         # azimuth of left edge of bounding box
     azimuth_right: float        # azimuth of right edge of bounding box
     n_returns: int              # number of valid lidar returns used
-    method: str                 # "median" | "min" | "none"
-    valid: bool                 # False if no usable returns found
+    method: str                 # "median" | "min" | "mean" | "none"
+    valid: bool                 # False if rejected; see `reason`
+    spread_m: float = 0.0       # max - min of the valid returns (m)
+    reason: str = ""            # why invalid: "no_returns" | "min_returns" | "max_spread"
 
 
 # ---------------------------------------------------------------------------
@@ -157,9 +166,20 @@ class LidarRangeExtractor:
         bounding box window. Compensates for small extrinsic misalignments.
         Default 0.0 (no padding).
     min_returns : int
-        Minimum valid returns required for a confident estimate.
-        If fewer are found, RangeEstimate.valid is still True but
-        n_returns will be low — caller can decide how to handle.
+        Fewer valid returns than this in the window -> the estimate is
+        REJECTED (valid=False, reason="min_returns"). Design note P4: at the
+        measured ~28% dropout a 0.3 m object at 3 m is backed by ~4 live rays,
+        so 3 clears 3 m; a narrow box backed by one stray ray is not a range.
+    max_spread : float
+        If the valid returns span more than this many metres (max - min) the
+        window straddles an object edge and the background behind it, and
+        "min" would confidently return whichever is nearer -- REJECT instead
+        (reason="max_spread"). This is also what catches the off-plane case
+        (a cup on a table: the plane sees the table edge AND the far wall).
+        Default inf keeps the June behaviour for old callers.
+    camera_yaw : float
+        Pan of the camera mount in base_link, radians, CCW-positive (from
+        TF, see the module docstring). 0.0 = camera looks straight ahead.
     """
 
     def __init__(
@@ -168,13 +188,21 @@ class LidarRangeExtractor:
         range_method: str = "median",
         angular_padding: float = 0.0,
         min_returns: int = 1,
+        max_spread: float = float("inf"),
+        camera_yaw: float = 0.0,
     ):
         if range_method not in ("median", "min", "mean"):
             raise ValueError(f"Unknown range_method: {range_method!r}")
+        if min_returns < 1:
+            raise ValueError(f"min_returns must be >= 1, got {min_returns}")
+        if max_spread <= 0:
+            raise ValueError(f"max_spread must be > 0, got {max_spread}")
         self.camera = camera
         self.range_method = range_method
         self.angular_padding = angular_padding
         self.min_returns = min_returns
+        self.max_spread = max_spread
+        self.camera_yaw = camera_yaw
 
     def extract_range(
         self,
@@ -187,11 +215,16 @@ class LidarRangeExtractor:
         Steps
         -----
         1. Convert bbox left/center/right pixel columns → azimuths.
-        2. Collect lidar returns whose angle falls within [left, right] window.
+        2. Mirror that window into lidar angles (see module docstring) and
+           collect the returns inside it.
         3. Filter out-of-range returns (inf, nan, below range_min, above range_max).
-        4. Aggregate with chosen method.
-        5. Return RangeEstimate.
+           Dropout rays read 0.0 and fall below range_min -- that is the only
+           thing removing them, so a driver reporting range_min 0.0 would let
+           them through as "object at 0 m".
+        4. Reject on min_returns / max_spread (P4).
+        5. Aggregate with chosen method and return RangeEstimate.
         """
+        # Camera (image) convention: right of centre is positive.
         az_center = self.camera.pixel_to_azimuth(bbox.center_u)
         az_left   = self.camera.pixel_to_azimuth(bbox.x1) - self.angular_padding
         az_right  = self.camera.pixel_to_azimuth(bbox.x2) + self.angular_padding
@@ -200,19 +233,38 @@ class LidarRangeExtractor:
         if az_left > az_right:
             az_left, az_right = az_right, az_left
 
-        # Collect valid returns within the angular window
-        valid_ranges = self._collect_returns(scan, az_left, az_right)
+        # Lidar (REP-103) convention: LEFT is positive. Mirror the window and
+        # add the mount's pan. The image's right edge (az_right, the larger
+        # camera azimuth) is the window's LOWER lidar angle.
+        lidar_lo = -az_right + self.camera_yaw
+        lidar_hi = -az_left + self.camera_yaw
 
-        if not valid_ranges:
+        # Collect valid returns within the angular window
+        valid_ranges = self._collect_returns(scan, lidar_lo, lidar_hi)
+
+        def rejected(reason: str, n: int, spread: float) -> RangeEstimate:
             return RangeEstimate(
                 range_m=float("inf"),
                 azimuth_center=az_center,
                 azimuth_left=az_left,
                 azimuth_right=az_right,
-                n_returns=0,
+                n_returns=n,
                 method="none",
                 valid=False,
+                spread_m=spread,
+                reason=reason,
             )
+
+        if not valid_ranges:
+            return rejected("no_returns", 0, 0.0)
+
+        spread = max(valid_ranges) - min(valid_ranges)
+
+        if len(valid_ranges) < self.min_returns:
+            return rejected("min_returns", len(valid_ranges), spread)
+
+        if spread > self.max_spread:
+            return rejected("max_spread", len(valid_ranges), spread)
 
         range_m = self._aggregate(valid_ranges)
 
@@ -224,6 +276,7 @@ class LidarRangeExtractor:
             n_returns=len(valid_ranges),
             method=self.range_method,
             valid=True,
+            spread_m=spread,
         )
 
     # ------------------------------------------------------------------
@@ -233,20 +286,20 @@ class LidarRangeExtractor:
     def _collect_returns(
         self,
         scan: LaserScanData,
-        az_left: float,
-        az_right: float,
+        lo: float,
+        hi: float,
     ) -> list[float]:
         """
-        Walk through every scan ray and collect those whose angle
-        falls within [az_left, az_right].
+        Collect the returns whose LIDAR angle falls within [lo, hi]
+        (both in the scan's own CCW-positive convention).
 
         Returns a list of valid (finite, in-range) distances.
         """
         valid: list[float] = []
 
         # Clamp window to the scan's angular coverage
-        search_left  = max(az_left,  scan.angle_min)
-        search_right = min(az_right, scan.angle_max)
+        search_left  = max(lo, scan.angle_min)
+        search_right = min(hi, scan.angle_max)
 
         if search_left > search_right:
             # Window entirely outside scan field of view

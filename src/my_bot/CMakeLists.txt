@@ -95,6 +95,9 @@ install(PROGRAMS
   # `ros2 run` does not. detection_report.py needs only vision_msgs.
   scripts/yolo_detector.py
   scripts/detection_report.py
+  # Day-6/7 fusion check: scores /semantic_landmarks for one class against a
+  # tape-measured truth (error, spread, duplicates). Listen only.
+  scripts/landmark_tape_measure.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

@@ -9,12 +9,20 @@ update an existing one, then applies an EMA position fusion.
 
 Responsibilities
 ----------------
-  • Associate incoming observations with existing landmarks
-    (class-gated nearest-neighbour)
+  • Associate incoming observations with existing landmarks:
+      1. by TRACK ID first (design note P5) -- within a continuous
+         tracker track this is exact and free;
+      2. else class-gated nearest-neighbour within merge_radius.
   • Create new landmarks when no match is found
   • Update existing landmarks via EMA position smoothing
   • Age / mark stale landmarks
   • Persist to / restore from JSON
+
+Track ids are only meaningful within one run of the detector: ByteTrack
+restarts at 1 when `make yolo` restarts, so a binding is dropped after
+track_timeout seconds unseen, and a track hit is refused if the landmark it
+points at is more than track_max_jump metres from the observation. Bindings
+are never persisted.
 
 No ROS2 imports. Pure Python.
 """
@@ -74,6 +82,13 @@ class AssociationResult:
     landmark: SemanticLandmark
     created: bool              # True = new landmark, False = existing updated
     distance: float            # distance from observation to landmark (0 if new)
+    by_track: bool = False     # True = associated on track id, not geometry
+
+
+@dataclass
+class _TrackBinding:
+    landmark_id: str
+    last_seen: float
 
 
 # ---------------------------------------------------------------------------
@@ -104,8 +119,24 @@ class LandmarkStore:
         Stale landmarks stay in memory but are flagged for the UI.
         Default: 300.0 (5 minutes).
     persist_path : str | Path | None
-        If set, load from this JSON file on init and save on every update.
-        None = in-memory only (useful for tests).
+        JSON file for persistence. None = in-memory only (useful for tests).
+    autosave : bool
+        Save on every observe/remove/clear (the June behaviour; a full JSON
+        rewrite per detection). The ROS node sets False and calls save()
+        from its publish timer instead.
+    restore_on_start : bool
+        Load persist_path on construction. The ROS node sets False: under
+        one-session SLAM (D-05) the map frame is new every run, so a
+        restored landmark would sit at yesterday's coordinates in today's
+        map. The file is still written, for the report and for a future
+        map-reload path.
+    track_timeout : float
+        Seconds a track-id binding survives unseen before it is dropped.
+        ByteTrack's own lost-track buffer is 30 frames (2 s at 15 Hz).
+    track_max_jump : float
+        Refuse a track hit whose landmark is further than this from the
+        observation (metres). Guards a restarted detector reusing id 1 for
+        a different object across the room.
     """
 
     def __init__(
@@ -115,6 +146,10 @@ class LandmarkStore:
         min_seen_to_publish: float = 2,
         stale_timeout: float = 300.0,
         persist_path: Optional[str | Path] = None,
+        autosave: bool = True,
+        restore_on_start: bool = True,
+        track_timeout: float = 2.0,
+        track_max_jump: float = 1.0,
     ):
         if not (0.0 < ema_alpha < 1.0):
             raise ValueError(f"ema_alpha must be in (0, 1), got {ema_alpha}")
@@ -125,41 +160,69 @@ class LandmarkStore:
         self.ema_alpha = ema_alpha
         self.min_seen_to_publish = min_seen_to_publish
         self.stale_timeout = stale_timeout
-        self.persist_path = Path(persist_path) if persist_path else None
+        self.persist_path = Path(persist_path).expanduser() if persist_path else None
+        self.autosave = autosave
+        self.track_timeout = track_timeout
+        self.track_max_jump = track_max_jump
 
         # Primary store: id → landmark
         self._landmarks: dict[str, SemanticLandmark] = {}
+        # Tracker id → landmark binding (never persisted)
+        self._tracks: dict[str, _TrackBinding] = {}
+        # True when memory differs from the file on disk
+        self.dirty = False
 
-        if self.persist_path and self.persist_path.exists():
+        if restore_on_start and self.persist_path and self.persist_path.exists():
             self._load()
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    def observe(self, world_point: WorldPoint, class_label: str) -> AssociationResult:
+    def observe(
+        self,
+        world_point: WorldPoint,
+        class_label: str,
+        track_id: str = "",
+        now: Optional[float] = None,
+    ) -> AssociationResult:
         """
         Main entry point. Called once per valid detection.
 
-        1. Find nearest existing landmark of the same class.
-        2. If within merge_radius → update (EMA position, confidence, staleness).
-        3. Otherwise → create new landmark.
-        4. Persist if a path is configured.
+        1. If track_id is bound to a live landmark of this class within
+           track_max_jump → update it (P5: exact within a track).
+        2. Else find the nearest landmark of the same class; within
+           merge_radius → update.
+        3. Otherwise → create a new landmark.
+        4. (Re)bind the track id to whichever landmark won.
+        5. Persist if autosave is on.
 
         Returns an AssociationResult with the landmark and whether it was created.
         """
-        now = time.time()
-        nearest, dist = self._nearest_of_class(class_label, world_point.x, world_point.y)
+        if now is None:
+            now = time.time()
+        self._expire_tracks(now)
 
-        if nearest is not None and dist <= self.merge_radius:
-            self._update(nearest, world_point, now)
-            result = AssociationResult(landmark=nearest, created=False, distance=dist)
+        hit = self._by_track(track_id, class_label, world_point.x, world_point.y)
+        if hit is not None:
+            lm, dist = hit
+            self._update(lm, world_point, now)
+            result = AssociationResult(landmark=lm, created=False, distance=dist, by_track=True)
         else:
-            landmark = self._create(class_label, world_point, now)
-            result = AssociationResult(landmark=landmark, created=True, distance=0.0)
+            nearest, dist = self._nearest_of_class(class_label, world_point.x, world_point.y)
+            if nearest is not None and dist <= self.merge_radius:
+                self._update(nearest, world_point, now)
+                result = AssociationResult(landmark=nearest, created=False, distance=dist)
+            else:
+                landmark = self._create(class_label, world_point, now)
+                result = AssociationResult(landmark=landmark, created=True, distance=0.0)
 
-        if self.persist_path:
-            self._save()
+        if track_id:
+            self._tracks[track_id] = _TrackBinding(result.landmark.id, now)
+
+        self.dirty = True
+        if self.autosave and self.persist_path:
+            self.save()
 
         return result
 
@@ -184,16 +247,28 @@ class LandmarkStore:
         """Remove a landmark by ID. Returns True if it existed."""
         if landmark_id in self._landmarks:
             del self._landmarks[landmark_id]
-            if self.persist_path:
-                self._save()
+            self._tracks = {t: b for t, b in self._tracks.items()
+                            if b.landmark_id != landmark_id}
+            self.dirty = True
+            if self.autosave and self.persist_path:
+                self.save()
             return True
         return False
 
     def clear(self) -> None:
-        """Wipe all landmarks (useful for debug / re-mapping)."""
+        """Wipe all landmarks and track bindings (debug / re-mapping / the
+        clear_landmarks service)."""
         self._landmarks.clear()
+        self._tracks.clear()
+        self.dirty = True
+        if self.autosave and self.persist_path:
+            self.save()
+
+    def save(self) -> None:
+        """Write the store to persist_path now (no-op without a path)."""
         if self.persist_path:
             self._save()
+            self.dirty = False
 
     def mark_stale(self, now: Optional[float] = None) -> list[str]:
         """
@@ -217,6 +292,30 @@ class LandmarkStore:
     # ------------------------------------------------------------------
     # Internal: association
     # ------------------------------------------------------------------
+
+    def _by_track(
+        self, track_id: str, class_label: str, x: float, y: float
+    ) -> Optional[tuple[SemanticLandmark, float]]:
+        """The landmark this track id is bound to, if the binding is still
+        plausible: landmark exists, same class, within track_max_jump."""
+        if not track_id:
+            return None
+        binding = self._tracks.get(track_id)
+        if binding is None:
+            return None
+        lm = self._landmarks.get(binding.landmark_id)
+        if lm is None or lm.class_label != class_label:
+            return None
+        d = lm.distance_to(x, y)
+        if d > self.track_max_jump:
+            return None
+        return lm, d
+
+    def _expire_tracks(self, now: float) -> None:
+        dead = [t for t, b in self._tracks.items()
+                if now - b.last_seen > self.track_timeout]
+        for t in dead:
+            del self._tracks[t]
 
     def _nearest_of_class(
         self, class_label: str, x: float, y: float
@@ -253,16 +352,14 @@ class LandmarkStore:
             class_label=class_label,
             x=wp.x,
             y=wp.y,
-            confidence=wp.range_m,   # placeholder; caller can set real confidence
+            # WorldPoint carries no detection confidence; observe_with_confidence()
+            # overwrites this with the detector's score.
+            confidence=0.5,
             seen_count=1,
             first_seen=now,
             last_seen=now,
             stale=False,
         )
-        # Store confidence properly — WorldPoint doesn't carry detection
-        # confidence, so initialise to a sensible default.
-        # The ROS node will pass in the YOLO confidence via observe_with_confidence().
-        lm.confidence = 0.5
         self._landmarks[lm.id] = lm
         return lm
 
@@ -300,8 +397,10 @@ class LandmarkStore:
             "version": 1,
             "landmarks": [lm.to_dict() for lm in self._landmarks.values()],
         }
-        # Write to temp file then rename for atomicity
-        tmp = self.persist_path.with_suffix(".tmp")
+        # Write to temp file then rename for atomicity. with_name, not
+        # with_suffix: the latter turns landmarks.json into landmarks.tmp.
+        self.persist_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.persist_path.with_name(self.persist_path.name + ".tmp")
         tmp.write_text(json.dumps(data, indent=2))
         tmp.replace(self.persist_path)
 
@@ -326,13 +425,15 @@ class LandmarkStore:
         world_point: WorldPoint,
         class_label: str,
         detection_confidence: float,
+        track_id: str = "",
+        now: Optional[float] = None,
     ) -> AssociationResult:
         """
         Like observe(), but also tracks YOLO detection confidence.
         Confidence is updated as max(existing, new) — we keep the
         best evidence seen, not the average.
         """
-        result = self.observe(world_point, class_label)
+        result = self.observe(world_point, class_label, track_id=track_id, now=now)
         lm = result.landmark
         if result.created:
             lm.confidence = detection_confidence

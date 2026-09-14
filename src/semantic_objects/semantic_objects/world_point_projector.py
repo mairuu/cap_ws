@@ -25,21 +25,36 @@ Coordinate frames
   │  y ← left    │
   └──────────────┘
 
-  camera frame offset (static TF, measured physically)
-  camera is mounted at some (dx, dy) offset from base_link origin,
-  and may have a yaw offset (pan angle) relative to the robot's forward axis.
+  sensor offsets (static TF, from the URDF via tf2 -- decision D-10)
+  The BEARING is the camera's: a ray from the camera mount's origin at
+  azimuth (about its x-axis) plus the mount's yaw in base_link. The RANGE
+  is the lidar's: a circle of radius r around laser_frame's origin. The
+  object is where the ray meets the circle. CameraExtrinsics carries both
+  origins: (dx, dy, yaw) for the camera and (lidar_dx, lidar_dy) for the
+  lidar.
+
+  Why not just "camera origin + r along the ray" (the June code): the
+  range is not measured from the camera. With the camera at (0.05, -0.03)
+  and the lidar at (-0.034, 0) that put every landmark ~9 cm off.
+  Why not "lidar origin + r along the ray": the camera sits 3 cm beside
+  the lidar's axis, so an object dead ahead of the camera is at 1.7 deg
+  from the lidar at 1 m -- more than one lidar ray (1.03 deg). The
+  ray/circle intersection is exact for both offsets and costs one sqrt.
 
 Pipeline
 --------
   RangeEstimate (azimuth in camera frame, range in metres)
         ↓
-  rotate by camera yaw offset  →  azimuth in base_link frame
+  mirror + rotate by camera mount yaw  →  bearing in base_link frame
         ↓
-  polar → Cartesian in base_link frame
+  camera ray ∩ lidar range circle      →  point in base_link frame
         ↓
-  translate by camera position offset  →  point in base_link frame
-        ↓
-  rotate + translate by robot pose  →  point in map frame
+  rotate + translate by robot pose     →  point in map frame
+
+2D model: z, the camera's -3 deg pitch and lens distortion are dropped.
+At 3 m the pitch biases the bearing by <= 2 cm at the frame corners and
+distortion by <= 1.3 cm at the edge -- both under one lidar ray (1.03 deg).
+Documented limitation, not modelled.
 """
 
 from __future__ import annotations
@@ -69,23 +84,37 @@ class Pose2D:
 @dataclass
 class CameraExtrinsics:
     """
-    Static transform: where the camera sits relative to base_link.
-    Measure physically from your robot's CAD or with a ruler.
+    Static sensor geometry in base_link. Filled from TF by the node (D-10),
+    never from a params file.
 
-    dx, dy  – camera origin offset from base_link origin (metres)
-               dx > 0 → camera is in front of robot centre
-               dy > 0 → camera is to the left
-
-    yaw     – camera pan angle relative to robot forward axis (radians)
-               0.0 = camera points straight ahead (most common)
-               positive = camera panned left
+    dx, dy  – the CAMERA mount's origin in base_link (metres):
+               dx > 0 forward, dy > 0 left (REP-103; a camera mounted on
+               the robot's right has dy < 0).
+    yaw     – the camera MOUNT's pan relative to robot forward (radians)
+               0.0 = camera points straight ahead
+               positive = camera panned left (CCW, REP-103)
+               Take it from camera_link, the x-forward mount frame. The
+               optical frame's yaw is -90 deg and would rotate every landmark
+               by a right angle.
+    lidar_dx, lidar_dy – the LIDAR's origin in base_link (metres), where the
+               range is measured from. None = same as the camera (the June
+               behaviour, kept for old callers and tests).
 
     Note: we ignore z (height) because the lidar is 2D and we produce
-    a 2D floor-plan map. If you add a depth camera later, add dz here.
+    a 2D floor-plan map.
     """
     dx: float = 0.0
     dy: float = 0.0
     yaw: float = 0.0
+    lidar_dx: Optional[float] = None
+    lidar_dy: Optional[float] = None
+
+    @property
+    def range_origin(self) -> tuple[float, float]:
+        return (
+            self.dx if self.lidar_dx is None else self.lidar_dx,
+            self.dy if self.lidar_dy is None else self.lidar_dy,
+        )
 
 
 @dataclass
@@ -95,7 +124,7 @@ class WorldPoint:
     """
     x: float                    # map frame, metres
     y: float                    # map frame, metres
-    range_m: float              # range from camera (for quality assessment)
+    range_m: float              # lidar range used (for quality assessment)
     azimuth_rad: float          # azimuth in camera frame (for debugging)
     n_lidar_returns: int        # how many lidar rays backed this estimate
     valid: bool                 # False if range was invalid
@@ -181,14 +210,35 @@ class WorldPointProjector:
         # ------------------------------------------------------------------
         az_base_ros = -estimate.azimuth_center + self.extrinsics.yaw
 
-        x_cam_in_base = r * math.cos(az_base_ros)
-        y_cam_in_base = r * math.sin(az_base_ros)
-
         # ------------------------------------------------------------------
-        # Step 3: apply camera position offset in base_link frame
+        # Step 3: the object is where the CAMERA's ray meets the LIDAR's
+        # range circle, in base_link.
+        #   ray:    P = C + t * d,  d = (cos az, sin az),  t >= 0
+        #   circle: |P - L| = r
+        #   => t^2 + 2 t (m . d) + |m|^2 - r^2 = 0,  m = C - L
+        # Take the far root: the near one is the ray's entry into the circle
+        # behind/beside the camera. No real root means the range is shorter
+        # than the sensor offset geometry allows -- reject.
+        # With C == L this reduces exactly to C + r * d.
         # ------------------------------------------------------------------
-        x_in_base = x_cam_in_base + self.extrinsics.dx
-        y_in_base = y_cam_in_base + self.extrinsics.dy
+        dx_ray = math.cos(az_base_ros)
+        dy_ray = math.sin(az_base_ros)
+        cx, cy = self.extrinsics.dx, self.extrinsics.dy
+        lx, ly = self.extrinsics.range_origin
+        mx, my = cx - lx, cy - ly
+        m_dot_d = mx * dx_ray + my * dy_ray
+        disc = m_dot_d * m_dot_d - (mx * mx + my * my) + r * r
+        if disc < 0.0:
+            return WorldPoint(
+                x=float("nan"), y=float("nan"),
+                range_m=r,
+                azimuth_rad=estimate.azimuth_center,
+                n_lidar_returns=estimate.n_returns,
+                valid=False,
+            )
+        t = -m_dot_d + math.sqrt(disc)
+        x_in_base = cx + t * dx_ray
+        y_in_base = cy + t * dy_ray
 
         # ------------------------------------------------------------------
         # Step 4: transform base_link → map frame using robot pose

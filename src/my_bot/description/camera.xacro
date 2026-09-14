@@ -6,11 +6,13 @@
          at 640x480, RELIABLE QoS.
 
          THIS FILE IS THE CAMERA EXTRINSICS. Decision D-10: the semantic node
-         looks up base_link -> camera_optical_link from TF rather than reading
-         camera.dx/dy/yaw out of a params file, so this joint origin is the
-         single source and there is no second copy to drift against. The old
-         board's robot_params.yaml did carry those numbers and it did not
-         survive; nothing here is recovered from it.
+         looks up base_link -> camera_link (the x-forward MOUNT frame, not the
+         optical one: its 2D projector wants the mount's yaw, and the optical
+         frame's yaw is -90 deg) from TF rather than reading camera.dx/dy/yaw
+         out of a params file, so this joint origin is the single source and
+         there is no second copy to drift against. The old board's
+         robot_params.yaml did carry those numbers and it did not survive;
+         nothing here is recovered from it.
 
          MEASURED 2026-09-09 by tape measure, and expressed in the terms that
          were actually measured (height above the FLOOR, distance from the
@@ -19,7 +21,7 @@
          parented to chassis, so both properties add the base_link -> chassis
          offset back in.
 
-         camera_link lands at (0.05, 0.03, 0.167) in base_link. -->
+         camera_link lands at (0.05, -0.03, 0.167) in base_link. -->
 
     <!-- Height of the lens centre above the floor. The lidar sits at 0.22, so
          the camera is 2 cm BELOW the scan plane: an object the camera sees
@@ -34,12 +36,13 @@
          camera position is the more trustworthy of the two. -->
     <xacro:property name="camera_offset_from_axle" value="0.05"/>
     <!-- Lateral offset from the robot centreline, POSITIVE LEFT (REP-103).
-         MAGNITUDE MEASURED (3 cm), SIDE ASSUMED LEFT. If the camera is
-         actually right of centre this must become -0.03. The error is small
-         and constant, so it will not look like a bug: every landmark lands
-         6 cm to one side, which reads as calibration slop rather than a sign
-         error. Confirm by eye before Day 6 and correct here, not downstream. -->
-    <xacro:property name="camera_offset_y" value="0.03"/>
+         MAGNITUDE MEASURED 9 Sep (3 cm). SIDE CONFIRMED 14 Sep BY THE USER:
+         the camera is mounted on the robot's RIGHT, so this is NEGATIVE.
+         It was +0.03 (left, assumed) from 9 to 14 Sep. The semantic node
+         reads this from TF (D-10) and intersects the camera's ray with the
+         lidar's range circle, so a wrong sign here moves every landmark by
+         the full 6 cm and reads as calibration slop, not as a bug. -->
+    <xacro:property name="camera_offset_y" value="-0.03"/>
     <!-- Mount tilt, in radians, POSITIVE NOSE-DOWN. Measured ~3 degrees UP,
          hence negative: a rotation of +p about +y sends the x-axis toward -z.
          Getting this backwards points the camera at the floor 6 degrees off

@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 ROS_DISTRO ?= humble
 
-.PHONY: build sim real slam nav explore rviz save-map yolo camera calib calib-report calib-scale teleop teleop-nav udev ports net net-check viewer-sync lidar-deps clean
+.PHONY: build sim real slam nav explore rviz save-map yolo camera calib calib-report calib-scale semantic test bridge bridge-venv ui ui-deps teleop teleop-nav udev ports net net-check viewer-sync lidar-deps clean
 
 build:
 	source /opt/ros/$(ROS_DISTRO)/setup.bash && colcon build --symlink-install
@@ -371,6 +371,57 @@ lidar-deps:
 	@if [ ! -d src/ydlidar_ros2_driver ]; then 		git clone -b humble https://github.com/YDLIDAR/ydlidar_ros2_driver.git 			src/ydlidar_ros2_driver; 	fi
 	@branch=$$(git -C src/ydlidar_ros2_driver rev-parse --abbrev-ref HEAD); 	if [ "$$branch" != humble ]; then 		echo "ERROR: src/ydlidar_ros2_driver is on '$$branch', not 'humble'."; 		echo "       master is Dashing-era and will not run on Humble."; 		echo "       git -C src/ydlidar_ros2_driver checkout humble"; 		exit 1; 	fi
 	$(MAKE) build
+
+# ---------------------------------------------------------------------------
+# Day 6 -- semantic fusion, bridge, UI
+# ---------------------------------------------------------------------------
+
+# Camera + lidar fusion node, plus the image_transport republish that gives
+# the browser bridge /image/compressed. Needs make real (TF, odom, /scan),
+# make slam (map frame) and make yolo (/detections) in other terminals.
+# Runs under PLAIN SYSTEM PYTHON -- never source the YOLO venv first; the
+# node needs rclpy/tf2/yaml from the system and nothing from the venv.
+#   make semantic
+#   make semantic PERSIST=            (no landmarks.json)
+PERSIST ?= $(HOME)/maps/landmarks.json
+semantic: build
+	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
+	source install/setup.bash && \
+	ros2 launch semantic_objects semantic.launch.py persist_path:=$(PERSIST)
+
+# Unit tests for the fusion maths, no ROS graph needed. Run from the package
+# dir on purpose: system pytest is 6.2.5 and has no pythonpath ini option,
+# so a bare `pytest` from here cannot import the package.
+test:
+	cd src/semantic_objects && python3 -m pytest test -q
+
+# Browser bridge (FastAPI) on port 8000. Lives in cap_ref/semantic-object.
+# Its venv is uv, pinned to the system python 3.10 (rclpy is cpython-310)
+# with system site-packages; the ROS setup must be sourced BEFORE uvicorn
+# starts or rclpy is not importable. First run: make bridge-venv.
+BRIDGE_DIR  ?= $(HOME)/cap_ref/semantic-object/semantic_bridge
+BRIDGE_VENV ?= $(HOME)/semantic-bridge-venv
+bridge-venv:
+	uv venv --python /usr/bin/python3.10 --system-site-packages $(BRIDGE_VENV)
+	uv pip install --python $(BRIDGE_VENV)/bin/python -e "$(BRIDGE_DIR)[dev]"
+bridge:
+	@test -x $(BRIDGE_VENV)/bin/uvicorn || { echo "no bridge venv -- run: make bridge-venv"; exit 1; }
+	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
+	cd $(BRIDGE_DIR) && \
+	$(BRIDGE_VENV)/bin/uvicorn semantic_bridge.main:app --host 0.0.0.0 --port 8000
+
+# Vite dev server for the map UI on port 3000, reachable from the laptop at
+# http://<jetson-ip>:3000. Needs Node 20 (NodeSource; apt's 12.x cannot run
+# Vite 5). The UI talks to the bridge at VITE_BACKEND_URL from
+# semantic_map_ui/.env -- that must be the JETSON's address, not localhost,
+# because the browser runs on the laptop. First run: make ui-deps.
+UI_DIR ?= $(HOME)/cap_ref/semantic-object/semantic_map_ui
+ui-deps:
+	cd $(UI_DIR) && npm ci
+ui:
+	@test -d $(UI_DIR)/node_modules || { echo "no node_modules -- run: make ui-deps"; exit 1; }
+	@test -f $(UI_DIR)/.env || echo "WARNING: $(UI_DIR)/.env missing; UI will look for the bridge on localhost"
+	cd $(UI_DIR) && npm run dev -- --host
 
 clean:
 	rm -rf build install log

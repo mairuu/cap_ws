@@ -1,0 +1,64 @@
+# semantic_objects parameters. DOTTED keys -- the June-era node read five of
+# these with slashes and died in __init__.
+#
+# NOT here, on purpose:
+#   camera.fx/fy/cx/cy  -> read from my_bot/config/c615_640x480.yaml
+#                          (camera.calibration_file, set by the launch file).
+#                          The old node's built-in 554.0 was 17 % off.
+#   camera.dx/dy/yaw    -> read from TF: base_link -> camera_link and
+#                          base_link -> laser_frame (decision D-10).
+semantic_objects:
+  ros__parameters:
+    camera:
+      width: 640          # must match the calibration file's image size
+      height: 480
+
+    detection:
+      min_confidence: 0.5
+      range_method: "min"     # nearest return in the window; max_spread
+                              # rejects the cases where that lies
+      angular_padding: 0.035  # rad (2 deg): the window is computed at the
+                              # camera, the lidar is 3 cm beside it
+      max_range: 5.0
+      min_range: 0.15
+      min_returns: 3          # P4. At the measured ~28 % dropout a 0.3 m
+                              # object at 3 m has ~4 live rays; 3 clears 3 m
+      max_spread: 0.5         # P4. Window straddling an edge + background,
+                              # or an off-plane object (cup on a table)
+
+    motion:
+      max_omega: 0.3          # rad/s. P3: no fusion while turning; the scan
+                              # is a 86 ms sweep treated as instantaneous
+      odom_max_age: 0.5       # s. Older odom -> gate CLOSED (fail-closed)
+    odom_topic: "/diff_cont/odom"   # not /odom -- there is no /odom on this robot
+
+    track:
+      timeout: 2.0            # s. ByteTrack's lost buffer is 30 frames at 15 Hz
+      max_jump: 1.0           # m. A restarted detector reuses id 1
+
+    landmark:
+      merge_radius: 0.5
+      ema_alpha: 0.3          # fixed EMA; the Kalman replacement is cut (D-06)
+      min_seen_to_publish: 2
+      stale_timeout: 300.0    # landmarks are never deleted by age (P7 cut, D-07)
+      restore_on_start: false # one-session SLAM (D-05): a new map frame every run
+      # persist_path is set by the launch file (default ~/maps/landmarks.json)
+
+    publish:
+      rate_hz: 2.0
+    report_period: 5.0
+
+    tf:
+      map_frame: "map"
+      base_frame: "base_link"
+      camera_frame: "camera_link"   # the MOUNT frame. camera_optical_link would
+                                    # be refused: its yaw is -90 deg
+      laser_frame: "laser_frame"
+      lookup_timeout: 0.05          # s, map->base_link at the detection stamp
+      static_timeout: 10.0          # s, waiting for the URDF frames at startup
+
+    scan_topic: "/scan"
+    detections_topic: "/detections"
+    sync:
+      slop: 0.1               # s. Both stamps are capture times; scan 86 ms,
+                              # detections 66 ms -> nearest pair <= 33 ms apart

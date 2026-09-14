@@ -75,7 +75,10 @@ def detections_to_bboxes(
         size_x, size_y                         (width, height in pixels)
 
     The best hypothesis (highest score) in each detection is used for
-    class_label and confidence.
+    class_label and confidence. Detection2D.id (the tracker's id, written by
+    my_bot's yolo_detector.py) is carried as BoundingBox.track_id; "" when
+    absent, and getattr() so the ROS-free test mocks without an `id` field
+    still convert.
     """
     boxes: list[BoundingBox] = []
 
@@ -102,6 +105,7 @@ def detections_to_bboxes(
             y2=cy + hh,
             class_label=best.hypothesis.class_id,
             confidence=confidence,
+            track_id=str(getattr(det, "id", "") or ""),
         ))
 
     return boxes
@@ -168,7 +172,14 @@ def landmarks_to_marker_array(
     """
     Convert a list of SemanticLandmark → visualization_msgs/MarkerArray.
 
-    Each landmark gets two markers:
+    The array starts with one DELETEALL marker, so RViz drops whatever it
+    was showing before applying this array (it applies a MarkerArray
+    atomically, so there is no flicker). Without it, marker ids are
+    positional and a landmark that disappears or reorders leaves its old
+    sphere on screen forever; an empty list after `clear_landmarks` would
+    never clear the display.
+
+    Each landmark then gets two markers:
       - A sphere at its (x, y) position.
       - A text label floating above it.
 
@@ -182,6 +193,12 @@ def landmarks_to_marker_array(
     """
     array = MarkerArray()
     now_stamp = rclpy.time.Time().to_msg()
+
+    wipe = Marker()
+    wipe.header.frame_id = frame_id
+    wipe.header.stamp = now_stamp
+    wipe.action = Marker.DELETEALL
+    array.markers.append(wipe)
 
     for i, lm in enumerate(landmarks):
         rgb = _CLASS_COLOURS.get(lm.class_label, _CLASS_COLOURS["default"])
