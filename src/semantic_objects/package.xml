@@ -1,0 +1,41 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>semantic_objects</name>
+  <version>0.2.0</version>
+  <description>Camera + 2D lidar semantic landmark fusion: YOLO bounding boxes on
+  /detections get a range from the /scan window they subtend, are projected into
+  the map frame at the detection's timestamp, and are fused into a persistent
+  landmark store published as /semantic_landmarks (JSON) and /semantic_markers.
+  Rebuilt on Day 6 (14 Sep 2026) from the June-era modules recovered from the USB
+  drive; the ROS package skeleton, launch, params and service are new.</description>
+  <maintainer email="chathatpol@gmail.com">mic-711</maintainer>
+  <license>MIT</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>tf2_ros_py</exec_depend>
+  <exec_depend>message_filters</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>vision_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>visualization_msgs</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <!-- semantic.launch.py runs an image_transport republish so the browser
+       bridge gets /image/compressed; cam2image has no transport plugins. -->
+  <exec_depend>image_transport</exec_depend>
+  <exec_depend>compressed_image_transport</exec_depend>
+  <!-- The camera intrinsics file lives in my_bot's share directory. -->
+  <exec_depend>my_bot</exec_depend>
+
+  <!-- Only pytest. The June code would fail flake8/pep257/copyright for
+       nothing (a Greek identifier, long lines, no headers); those ament
+       tests are deliberately not included. -->
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
