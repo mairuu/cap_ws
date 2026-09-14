@@ -35,6 +35,9 @@
        Nav2's /cmd_vel with teleop onto diff_cont's unstamped topic. -->
   <exec_depend>nav2_bringup</exec_depend>
   <exec_depend>twist_mux</exec_depend>
+  <exec_depend>vision_msgs</exec_depend>
+  <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>image_tools</exec_depend>
   <!-- Frontier exploration, so the robot picks its own goals. Built from
        src/m-explore-ros2 in this workspace; not available as a binary. -->
   <exec_depend>explore_lite</exec_depend>

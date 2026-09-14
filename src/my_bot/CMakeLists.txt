@@ -90,6 +90,11 @@ install(PROGRAMS
   scripts/make_checkerboard.py
   scripts/camera_calib_report.py
   scripts/camera_check_scale.py
+  # Day-5 detector and its gate check. yolo_detector.py needs the YOLO venv's
+  # site-packages on PYTHONPATH -- launch/yolo.launch.py sets it; bare
+  # `ros2 run` does not. detection_report.py needs only vision_msgs.
+  scripts/yolo_detector.py
+  scripts/detection_report.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

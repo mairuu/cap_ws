@@ -74,9 +74,13 @@ uv pip install --python "$PY" ultralytics --no-deps
 #                     wheel shadows it and is not CUDA-aware
 #   torch/torchvision -- already installed above, from JetPack
 #   numpy          -- already pinned <2 above
+# lap is NOT in ultralytics' dependency list but model.track() needs it for
+# ByteTrack's linear assignment; without it the first track() call
+# "AutoUpdates" it with pip at runtime (seen 14 Sep). Install it here so a
+# demo-day machine with no network does not hit that.
 uv pip install --python "$PY" \
     cloudpickle filelock matplotlib pillow pyyaml requests \
-    psutil polars nvidia-ml-py ultralytics-thop "numpy<2"
+    psutil polars nvidia-ml-py ultralytics-thop "numpy<2" "lap>=0.5.12"
 
 echo "== 5. verify =="
 source /opt/ros/humble/setup.bash

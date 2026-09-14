@@ -3,11 +3,6 @@ ROS_DISTRO ?= humble
 
 .PHONY: build sim real slam nav explore rviz save-map yolo camera calib calib-report calib-scale teleop teleop-nav udev ports net net-check viewer-sync lidar-deps clean
 
-# yolo_ros lives in the older dev_ws, not here, so its install has to be on the
-# path for `make yolo`. cap_ws is sourced after it and wins on the packages
-# (my_bot, ydlidar_ros2_driver) that exist in both.
-DEV_WS ?= /home/jetson/dev_ws
-
 build:
 	source /opt/ros/$(ROS_DISTRO)/setup.bash && colcon build --symlink-install
 
@@ -109,21 +104,35 @@ save-map:
 	ros2 run nav2_map_server map_saver_cli -f $(MAP) \
 	  --ros-args -p save_map_timeout:=$(SAVE_TIMEOUT)
 
-# YOLO detection off the USB webcam. Publishes /yolo/detections and
-# /yolo/tracking (yolo_msgs/DetectionArray) plus /yolo/dbg_image.
+# YOLO detection + tracking off the USB webcam -- Day 5, decision D-11 B.
+# Publishes vision_msgs/Detection2DArray on /detections (track id in
+# Detection2D.id, capture-time stamp) and an annotated /detections/image.
 #
-# Runs standalone -- it needs no other bringup, just the camera. Inference uses
-# the hand-built venv under dev_ws (JetPack torch + TensorRT); the launch puts
-# it on PYTHONPATH itself, so do NOT source the venv's activate first and do
-# NOT let anything run `uv sync` against it. See src/my_bot/launch/yolo.launch.py.
+# Runs standalone -- it needs no other bringup. It starts cam2image itself
+# with focus LOCKED at FOCUS (same value as the calibration; the C615 is
+# varifocal and autofocus moves fx), so do not also run `make camera`; two
+# processes cannot hold /dev/video0. If a camera IS already up:
+#   make yolo USE_CAMERA=false
 #
-# Swap models:  make yolo MODEL=/home/jetson/yolo/yolo26s.engine
-MODEL ?= /home/jetson/yolo/yolo26n.engine
+# Inference uses the hand-built venv at ~/yolo/venv (JetPack torch + CUDA).
+# The launch puts its site-packages on PYTHONPATH itself: do NOT source the
+# venv's activate first, and NEVER run `uv sync` against it. Rebuild it only
+# with yolo/setup_yolo_venv.sh. See src/my_bot/launch/yolo.launch.py.
+#
+# Swap models:   make yolo MODEL=$(HOME)/yolo/yolov8n.pt
+# Smaller input: make yolo IMGSZ=480
+# No GPU:        make yolo DEVICE=cpu            (demo-day fallback, ~5 Hz)
+# Gate check:    ros2 run my_bot detection_report.py --seconds 300
+MODEL      ?= $(HOME)/yolo/yolo26n.pt
+IMGSZ      ?= 640
+DEVICE     ?= cuda:0
+USE_CAMERA ?= true
 yolo: build
 	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
-	source $(DEV_WS)/install/setup.bash && \
 	source install/setup.bash && \
-	ros2 launch my_bot yolo.launch.py model:=$(MODEL)
+	ros2 launch my_bot yolo.launch.py model:=$(MODEL) imgsz:=$(IMGSZ) \
+	  device:=$(DEVICE) use_camera:=$(USE_CAMERA) focus:=$(FOCUS) \
+	  camera_device:=$(CAM_DEV) camera_fps:=$(CAM_FPS)
 
 # Camera intrinsics -- Day 4 sec 4. Needs the camera and nothing else: no
 # robot, no lidar, no Nav2. Two terminals.
