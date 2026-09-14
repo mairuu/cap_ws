@@ -3,10 +3,15 @@
 # Starts two things:
 #   1. semantic_objects_node: /scan + /detections -> /semantic_landmarks,
 #      /semantic_markers, and the clear_landmarks service.
-#   2. image_transport republish: /image (raw, from cam2image) -> /image/compressed
-#      for the browser bridge's camera pane. cam2image uses a plain rclcpp
-#      publisher, so no transport plugin ever attaches to it and /image/compressed
-#      does not otherwise exist. (STATE.md, 11 Sep.)
+#   2. image_transport republish: camera_source (default /detections/image, the
+#      detector's ANNOTATED frame with boxes and track ids) -> /image/compressed
+#      for the browser bridge's camera pane. So the browser shows what YOLO
+#      sees, which is what you want when "sometimes it sees it, sometimes it
+#      doesn't". camera_source:=/image gives the raw camera instead. cam2image
+#      uses a plain rclcpp publisher, so no transport plugin ever attaches to
+#      it and /image/compressed does not otherwise exist. (STATE.md, 11 Sep.)
+#      yolo_detector.py only draws the annotated frame while something
+#      subscribes to it, so this costs nothing when the bridge is down.
 #
 # Needs, in other terminals: make real (TF, odom, /scan), make slam (map frame),
 # make yolo (/detections and /image). Without make real the node still starts
@@ -20,6 +25,7 @@
 #   ros2 launch semantic_objects semantic.launch.py
 #   ros2 launch semantic_objects semantic.launch.py persist_path:=~/maps/landmarks.json
 #   ros2 launch semantic_objects semantic.launch.py republish:=false
+#   ros2 launch semantic_objects semantic.launch.py camera_source:=/image   # raw camera
 
 import os
 
@@ -60,7 +66,7 @@ def generate_launch_description():
         name="image_republish",
         arguments=["raw", "compressed"],
         remappings=[
-            ("in", "/image"),
+            ("in", LaunchConfiguration("camera_source")),
             ("out/compressed", "/image/compressed"),
         ],
         condition=IfCondition(LaunchConfiguration("republish")),
@@ -83,6 +89,10 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "republish", default_value="true",
             description="also run image_transport republish for /image/compressed"),
+        DeclareLaunchArgument(
+            "camera_source", default_value="/detections/image",
+            description="what the browser's camera pane shows: the detector's "
+                        "annotated frame (default) or /image for the raw camera"),
         node,
         republish,
     ])
