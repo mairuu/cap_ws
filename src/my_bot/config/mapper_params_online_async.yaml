@@ -175,8 +175,8 @@ slam_toolbox:
     # If check_pose_stability.py still reports the correction travelling far
     # more than it nets, the next step is distance_variance_penalty 0.05, not
     # a wider window.
-    distance_variance_penalty: 0.1
-    angle_variance_penalty: 0.2
+    distance_variance_penalty: 0.05
+    angle_variance_penalty: 0.15
 
     fine_search_angle_offset: 0.00349
     # TUNED 2026-09-11 (D-18): upstream 0.349 (+/-20 deg). Per 0.2 rad keyframe

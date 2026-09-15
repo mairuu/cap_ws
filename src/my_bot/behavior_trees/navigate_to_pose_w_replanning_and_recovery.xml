@@ -1,0 +1,61 @@
+<!--
+  OURS. A copy of nav2_bt_navigator's tree of the same name, identical except
+  for time_allowance on Spin. Owned here for the same reason nav2_params.yaml
+  is owned here: a nav2 package upgrade must not be able to retune the robot.
+
+  WHY THE COPY EXISTS - Spin's time_allowance is a BT PORT, not a ROS
+  parameter. There is nowhere in nav2_params.yaml to set it; the only way to
+  change it is to own the XML. Upstream leaves it at its 10.0 s port default.
+
+  THE ARITHMETIC THAT FORCED THIS (measured 15 Sep, Day 4 gate attempt):
+
+      spin_dist                     1.57 rad   (upstream default, kept)
+      behavior_server.max_rotational_vel  0.1 rad/s
+      -> 1.57 / 0.1                = 15.7 s MINIMUM, before any accel ramp
+      upstream time_allowance      = 10.0 s
+
+  The spin could therefore never finish, on any robot, in any room, no matter
+  what the floor or the odometry did. behavior_server logged "Turning 1.57 for
+  spin behavior" and "Exceeded time allowance before reaching the Spin goal"
+  exactly 10.000 s later, four times out of four. It is a config
+  contradiction, not drift and not a motor limit.
+
+  25 s is 1.6x the 15.7 s the geometry needs, which leaves room for the
+  start-up accel ramp and for the wheels creeping slower than commanded.
+
+  DO NOT "fix" this by raising behavior_server.max_rotational_vel instead.
+  It is deliberately below DWB's max_vel_theta (0.125) so that a recovery
+  spin is never the fastest this robot ever moves. recoveries fire exactly
+  when the map is already confused, and the lidar sweeps 360 deg over a full
+  100 ms with no deskew. See the note on max_vel_theta in nav2_params.yaml.
+-->
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RecoveryNode number_of_retries="6" name="NavigateRecovery">
+      <PipelineSequence name="NavigateWithReplanning">
+        <RateController hz="1.0">
+          <RecoveryNode number_of_retries="1" name="ComputePathToPose">
+            <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+            <ClearEntireCostmap name="ClearGlobalCostmap-Context" service_name="global_costmap/clear_entirely_global_costmap"/>
+          </RecoveryNode>
+        </RateController>
+        <RecoveryNode number_of_retries="1" name="FollowPath">
+          <FollowPath path="{path}" controller_id="FollowPath"/>
+          <ClearEntireCostmap name="ClearLocalCostmap-Context" service_name="local_costmap/clear_entirely_local_costmap"/>
+        </RecoveryNode>
+      </PipelineSequence>
+      <ReactiveFallback name="RecoveryFallback">
+        <GoalUpdated/>
+        <RoundRobin name="RecoveryActions">
+          <Sequence name="ClearingActions">
+            <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
+            <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
+          </Sequence>
+          <Spin spin_dist="1.57" time_allowance="25.0"/>
+          <Wait wait_duration="5"/>
+          <BackUp backup_dist="0.30" backup_speed="0.05"/>
+        </RoundRobin>
+      </ReactiveFallback>
+    </RecoveryNode>
+  </BehaviorTree>
+</root>

@@ -242,9 +242,18 @@ ports:
 
 # Manual driving with NO navigation running. Publishes straight to the
 # controller, bypassing twist_mux (which only exists while `make nav` is up).
+#
+# Starts at SPEED, not teleop_twist_keyboard's own 0.5 m/s default. 0.5 is what
+# smeared the Day 3 map on 9 and 10 Sep: the X3 Pro sweeps 360 degrees over a
+# full 100 ms and the stamp is already ~88 ms old at receipt, so 0.5 m/s shears
+# each scan by ~8.7 cm along the path. No rigid transform absorbs that, and
+# optimisation can move a scan's pose but cannot un-shear the scan, so the
+# doubled wall stays drawn. diff_cont's ceiling (0.15 m/s) stops `q` running
+# away, but mapping wants 0.10.
 teleop:
 	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
-	ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r /cmd_vel:=/diff_cont/cmd_vel_unstamped
+	ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r /cmd_vel:=/diff_cont/cmd_vel_unstamped \
+	  -p speed:=$(SPEED) -p turn:=$(TURN)
 
 # Manual driving WHILE `make nav` / `make explore` is running. THIS IS THE
 # E-STOP -- use it, not `make teleop`, during any autonomous run.

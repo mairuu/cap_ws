@@ -57,6 +57,16 @@ bt_navigator:
     global_frame: map
     robot_base_frame: base_link
     odom_topic: /diff_cont/odom
+    # OURS, not nav2_bt_navigator's copy. Identical to upstream's tree of the
+    # same name except that Spin carries time_allowance="25.0".
+    #
+    # Upstream leaves it at the BT port default of 10.0 s, and spin_dist 1.57
+    # at behavior_server.max_rotational_vel 0.1 rad/s needs 15.7 s. The spin
+    # recovery could therefore never succeed -- measured 15 Sep, four failures
+    # out of four, each at exactly 10.000 s. time_allowance is a BT PORT and
+    # has no parameter, so owning the XML is the only way to set it.
+    # See behavior_trees/navigate_to_pose_w_replanning_and_recovery.xml.
+    default_nav_to_pose_bt_xml: $(find-pkg-share my_bot)/behavior_trees/navigate_to_pose_w_replanning_and_recovery.xml
     bt_loop_duration: 10
     default_server_timeout: 20
     plugin_lib_names:
