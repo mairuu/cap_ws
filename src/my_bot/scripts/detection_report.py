@@ -154,6 +154,25 @@ class Report(Node):
                     self.frames_without_id += 1
 
 
+def _teardown(node, spinner):
+    """Stop the executor BEFORE the interpreter starts tearing down.
+
+    rclpy.spin() runs in a daemon thread here. Calling sys.exit() straight after
+    rclpy.shutdown() races it: shutdown makes spin return, but if the process
+    exits first the C++ executor thread is still live at static-destructor time
+    and the run ends in `terminate called without an active exception` /
+    `[ros2run]: Aborted`. Seen 16 Sep after a clean 301 s gate run -- the report
+    had already printed, so it cost nothing but it looks exactly like a crash.
+    Join the spinner, then destroy the node, then exit.
+    """
+    rclpy.shutdown()
+    spinner.join(timeout=2.0)
+    try:
+        node.destroy_node()
+    except Exception:  # already torn down; nothing useful to do here
+        pass
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -219,7 +238,7 @@ def main():
     if len(arr) < 2:
         print("FAIL  fewer than 2 messages received. Is the detector running, and "
               "does its QoS match (try --best-effort)?")
-        rclpy.shutdown()
+        _teardown(node, spinner)
         sys.exit(1)
 
     dts = [(b - a) * 1000 for a, b in zip(arr, arr[1:])]
@@ -295,7 +314,7 @@ def main():
           + (f": {why}" if why else (f": tj max {max(tjs):.1f} C < {args.tj_max:.0f}" if tjs else ""))
           + ("" if window >= 290 else f"   (only {window:.0f} s -- the gate wants 300)"))
 
-    rclpy.shutdown()
+    _teardown(node, spinner)
     sys.exit(0 if (ok_rate and ok_ids and verdict_thermal) else 1)
 
 
