@@ -174,6 +174,21 @@ class SemanticObjectsNode(Node):
         self._odom_sub = self.create_subscription(
             Odometry, P("odom_topic"), self._on_odom, SENSOR_QOS)
 
+        # --- Stats, reset every report ---
+        # MUST be initialised BEFORE _setup_subscribers(). TransformListener is
+        # constructed with spin_thread=True, so a background executor exists and
+        # can dispatch _on_synced the instant the synchroniser is registered --
+        # before __init__ has finished. If /detections is ALREADY flowing when
+        # this node starts, that happens immediately, _on_synced raises
+        # AttributeError on self._stats, and the exception kills the executor:
+        # the process stays alive and the node stays registered while nothing
+        # is ever processed again. Seen 16 Sep starting `make semantic` after
+        # `make yolo` was already publishing at 15 Hz. Starting them the other
+        # way round hides it, which is why it survived until now.
+        self._stats = Counter()
+        self._total_detections = 0
+        self._total_fused = 0
+
         # --- Subscribers with time-sync ---
         self._setup_subscribers()
 
@@ -190,11 +205,6 @@ class SemanticObjectsNode(Node):
         self._publish_timer = self.create_timer(1.0 / rate_hz, self._publish_landmarks)
         self._stale_timer = self.create_timer(stale_check_s, self._check_stale)
         self._report_timer = self.create_timer(P("report_period"), self._report)
-
-        # --- Stats, reset every report ---
-        self._stats = Counter()
-        self._total_detections = 0
-        self._total_fused = 0
 
         # Publish once so RViz/bridge see an (empty) latched payload immediately.
         self._publish_landmarks()
