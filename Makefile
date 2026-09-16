@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 ROS_DISTRO ?= humble
 
-.PHONY: build sim real slam nav explore rviz save-map yolo yolo-onnx camera calib calib-report calib-scale semantic test bridge bridge-venv ui ui-deps teleop teleop-nav udev ports net net-check viewer-sync lidar-deps clean
+.PHONY: build sim real slam nav explore rviz save-map bag bag-play yolo yolo-onnx camera calib calib-report calib-scale semantic test bridge bridge-venv ui ui-deps teleop teleop-nav udev ports net net-check viewer-sync lidar-deps clean
 
 build:
 	source /opt/ros/$(ROS_DISTRO)/setup.bash && colcon build --symlink-install
@@ -103,6 +103,57 @@ save-map:
 	source install/setup.bash && \
 	ros2 run nav2_map_server map_saver_cli -f $(MAP) \
 	  --ros-args -p save_map_timeout:=$(SAVE_TIMEOUT)
+
+# Record a demo run as a bag -- Day 7's fallback if live hardware misbehaves.
+#
+# THE RECOVERY.md DRAFT OF THIS TARGET IS WRONG and is kept there only as
+# history: it records `/odom`, which does not exist on this robot. diff_cont
+# publishes `/diff_cont/odom` (config/my_controllers.yaml, and the explicit note
+# in semantic_objects/config/robot_params.yaml). Recording /odom gives a bag
+# with no odometry and no warning -- the topic simply never produces a message.
+#
+# LATCHED TOPICS NEED NO SPECIAL HANDLING. Four of these are TRANSIENT_LOCAL
+# (/tf_static, /map, /semantic_landmarks, /semantic_markers) and it is tempting
+# to assume playback breaks them. It does not: rosbag2 records each publisher's
+# offered QoS into metadata.yaml (`offered_qos_profiles`) and `ros2 bag play`
+# reproduces it, so a late-joining transient-local subscriber -- RViz's Map and
+# Semantic Landmarks displays, the bridge's map panel -- still gets the latched
+# message. VERIFIED 16 Sep on this board, both from a real bag and from a
+# synthetic one, with and without a QoS override file: received either way.
+# There is therefore no override file and no need for one.
+#
+# For the same reason you do NOT have to start recording before `make real`.
+# /tf_static is published once at t=0, but the recorder subscribes with the
+# offered transient-local QoS and receives the latched copy whenever it starts.
+# Observed 16 Sep: a recorder started well after bring-up still captured
+# /tf_static (count 1). Start it whenever you like.
+#
+# /image is deliberately EXCLUDED: 640x480 RELIABLE at 15 Hz dominates the bag
+# size, and /detections/image (the annotated frame) plus /image/compressed (what
+# the UI actually shows) cover every demo need between them. To add it back:
+#   make bag TOPICS="$(BAG_TOPICS) /image"
+BAG_DIR    ?= $(HOME)/bags
+BAG_TOPICS ?= /tf_static /tf /scan /diff_cont/odom /map \
+              /detections /detections/image /image/compressed \
+              /semantic_landmarks /semantic_markers
+TOPICS     ?= $(BAG_TOPICS)
+bag:
+	@mkdir -p $(BAG_DIR)
+	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
+	source install/setup.bash && \
+	ros2 bag record -o $(BAG_DIR)/$$(date +%F-%H%M%S) \
+	  --compression-mode file --compression-format zstd \
+	  $(TOPICS)
+
+# Replay a recorded run.  make bag-play BAG=~/bags/2026-09-17-1032
+#
+# --clock publishes /clock so anything started with use_sim_time:=true follows
+# the bag's timeline. RViz does not need it; a replayed Nav2 would.
+bag-play:
+	@test -n "$(BAG)" || { echo "set BAG=<path to the bag directory>"; exit 1; }
+	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
+	source install/setup.bash && \
+	ros2 bag play $(BAG) --clock
 
 # YOLO detection + tracking off the USB webcam -- Day 5, decision D-11 B.
 # Publishes vision_msgs/Detection2DArray on /detections (track id in

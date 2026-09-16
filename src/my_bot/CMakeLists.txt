@@ -98,6 +98,9 @@ install(PROGRAMS
   # Day-6/7 fusion check: scores /semantic_landmarks for one class against a
   # tape-measured truth (error, spread, duplicates). Listen only.
   scripts/landmark_tape_measure.py
+  # Day-7 stretch: "go to the nearest chair". Needs make nav (NavigateToPose)
+  # and make semantic (/semantic_landmarks) as well as the rest of the stack.
+  scripts/go_to_object.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

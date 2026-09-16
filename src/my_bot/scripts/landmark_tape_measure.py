@@ -31,11 +31,30 @@ LISTEN ONLY. Needs make real, make slam, make yolo, make semantic.
 
     ros2 run my_bot landmark_tape_measure.py chair --truth 1.80 0.75
     ros2 run my_bot landmark_tape_measure.py chair --truth 1.80 0.75 --seconds 60
+
+THE DAY 7 FOUR-PASS PROTOCOL. The design note's section 08 asks for spread
+ACROSS four passes from four directions, which is not the same number as the
+spread within a single run. Within-run spread is fusion jitter while the robot
+sits still; across-pass spread is how far the four estimates disagree with each
+other, and only that one exposes a bias that depends on viewing angle. Run one
+pass per direction, then summarise:
+
+    ros2 run my_bot landmark_tape_measure.py chair --truth 1.80 0.75 --pass-label front
+    ros2 run my_bot landmark_tape_measure.py chair --truth 1.80 0.75 --pass-label right
+    ros2 run my_bot landmark_tape_measure.py chair --truth 1.80 0.75 --pass-label back
+    ros2 run my_bot landmark_tape_measure.py chair --truth 1.80 0.75 --pass-label left
+    ros2 run my_bot landmark_tape_measure.py chair --truth 1.80 0.75 --summary
+
+Each pass appends a line to --session (default ~/maps/tape_session.jsonl);
+--summary reads them back and prints the table Day 7 wants. Delete the session
+file before starting a fresh set, or move the chair and the summary will warn
+that it holds more than one truth position.
 """
 
 import argparse
 import json
 import math
+import os
 import statistics
 import sys
 import threading
@@ -73,6 +92,79 @@ class Listener(Node):
                 self.history.setdefault(lm["id"], []).append((t, lm["x"], lm["y"], lm))
 
 
+def record_pass(args, row):
+    """Append one pass to the session file. One JSON object per line."""
+    path = os.path.expanduser(args.session)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "a") as f:
+        f.write(json.dumps(row) + "\n")
+    print(f"\nrecorded pass {row['pass_label']!r} -> {path}")
+    print(f"when all four are in:  ros2 run my_bot landmark_tape_measure.py "
+          f"{args.class_label} --truth {row['truth_x']:.2f} {row['truth_y']:.2f} --summary")
+
+
+def summarise(args):
+    """The Day 7 table: per-pass rows plus spread ACROSS passes.
+
+    This is the number the design note section 08 actually asks for, and it is
+    NOT the same as the within-run spread each pass prints. Within-run spread is
+    fusion jitter while the robot sits in one place; across-pass spread is how
+    far the four estimates disagree with each other, which is what exposes a
+    viewing-angle-dependent bias. Reporting one in place of the other would hide
+    exactly the error the four-direction protocol exists to find.
+    """
+    path = os.path.expanduser(args.session)
+    try:
+        rows = [json.loads(ln) for ln in open(path) if ln.strip()]
+    except FileNotFoundError:
+        print(f"no session file at {path}. Run each pass with --pass-label first.")
+        return 1
+    rows = [r for r in rows if r.get("truth_x") is not None]
+    if not rows:
+        print(f"{path} has no passes in it.")
+        return 1
+
+    tx, ty = rows[-1]["truth_x"], rows[-1]["truth_y"]
+    mixed = {(r["truth_x"], r["truth_y"]) for r in rows}
+    if len(mixed) > 1:
+        print(f"WARNING  {len(mixed)} different truth positions in this session file. "
+              f"Reporting against the most recent ({tx:.2f}, {ty:.2f}); delete the file "
+              f"and re-run the passes if the chair moved.\n")
+
+    print(f"=== four-pass summary, {len(rows)} pass(es), truth ({tx:.2f}, {ty:.2f}) ===\n")
+    print(f"| {'Pass':<10} | {'Published x':>11} | {'Published y':>11} | {'Error':>7} | {'Dups':>4} |")
+    print(f"|{'-'*12}|{'-'*13}|{'-'*13}|{'-'*9}|{'-'*6}|")
+    for r in rows:
+        print(f"| {r['pass_label']:<10} | {r['x']:>11.3f} | {r['y']:>11.3f} | "
+              f"{r['error']:>6.3f}m | {r['duplicates']:>4} |")
+
+    xs = [r["x"] for r in rows]
+    ys = [r["y"] for r in rows]
+    cx, cy = statistics.mean(xs), statistics.mean(ys)
+    across = max(math.hypot(x - cx, y - cy) for x, y in zip(xs, ys)) * 2
+    mean_err = statistics.mean(r["error"] for r in rows)
+    worst_err = max(r["error"] for r in rows)
+    max_dups = max(r["duplicates"] for r in rows)
+
+    print(f"\nmean error        {mean_err:.3f} m     (worst pass {worst_err:.3f} m)")
+    print(f"spread ACROSS {len(rows)} passes  {across:.3f} m peak-to-peak about "
+          f"({cx:+.3f}, {cy:+.3f})")
+    print(f"duplicates        {max_dups} (worst pass)")
+
+    if len(rows) < 4:
+        print(f"\nNOTE only {len(rows)} of 4 passes recorded -- the protocol wants front, "
+              f"right, back and left.")
+
+    print("\n=== verdicts ===")
+    ok_err = worst_err <= args.error_max
+    ok_spread = across <= args.spread_max
+    ok_dup = max_dups == 1
+    print(f"[{'PASS' if ok_err else 'FAIL'}] worst-pass error {worst_err:.3f} m <= {args.error_max}")
+    print(f"[{'PASS' if ok_spread else 'FAIL'}] across-pass spread {across:.3f} m <= {args.spread_max}")
+    print(f"[{'PASS' if ok_dup else 'FAIL'}] duplicates per true object == 1 (worst {max_dups})")
+    return 0 if (ok_err and ok_spread and ok_dup) else 1
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -85,7 +177,21 @@ def main():
                     help="landmarks of the class within this of the truth count as the same object")
     ap.add_argument("--error-max", type=float, default=0.25)
     ap.add_argument("--spread-max", type=float, default=0.15)
+    # --- Day 7 four-pass protocol (design note section 08) ---
+    ap.add_argument("--pass-label", metavar="NAME",
+                    help="name this run as one PASS (e.g. front/right/back/left) and "
+                         "append its result to --session")
+    ap.add_argument("--session", metavar="FILE",
+                    default=os.path.expanduser("~/maps/tape_session.jsonl"),
+                    help="JSONL file accumulating one line per pass "
+                         "(default: ~/maps/tape_session.jsonl)")
+    ap.add_argument("--summary", action="store_true",
+                    help="do not listen; read --session and report the across-pass "
+                         "numbers the Day 7 table wants, then exit")
     args = ap.parse_args()
+
+    if args.summary:
+        sys.exit(summarise(args))
     tx, ty = args.truth
 
     rclpy.init()
@@ -154,7 +260,17 @@ def main():
           f"({bearing_pub-bearing_truth:+.2f} deg)  -- a sign flip here is the camera side "
           f"or the mirror; a constant offset is cx or camera yaw")
 
-    xs_ys = [(x, y) for (_, x, y, _) in history.get(best["id"], [])]
+    # WITHIN-RUN spread, over EVERY id that sat near the truth -- not just
+    # best["id"]. Keying on the nearest id alone silently drops the earlier
+    # history when association splits the object mid-run, which is exactly what
+    # a four-direction pass stresses, and understates the number being reported.
+    xs_ys = []
+    for lm_id, hist in history.items():
+        if not hist:
+            continue
+        _, hx, hy, _ = hist[-1]
+        if math.hypot(hx - tx, hy - ty) <= args.dup_radius:
+            xs_ys.extend((x, y) for (_, x, y, _) in hist)
     if len(xs_ys) >= 2:
         cxm = statistics.mean(x for x, _ in xs_ys)
         cym = statistics.mean(y for _, y in xs_ys)
@@ -179,6 +295,12 @@ def main():
     print(f"[{'PASS' if ok_spread else 'FAIL'}] spread {spread:.3f} m <= {args.spread_max}")
     print(f"[{'PASS' if ok_dup else 'FAIL'}] exactly one landmark within {args.dup_radius:.1f} m "
           f"of truth (found {len(near)})")
+
+    if args.pass_label:
+        record_pass(args, dict(pass_label=args.pass_label, x=best["x"], y=best["y"],
+                               truth_x=tx, truth_y=ty, error=err,
+                               within_run_spread=spread, duplicates=len(near),
+                               seen_count=best["seen_count"], id=best["id"]))
     rclpy.shutdown()
     sys.exit(0 if (ok_err and ok_spread and ok_dup) else 1)
 
