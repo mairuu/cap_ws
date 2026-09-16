@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 ROS_DISTRO ?= humble
 
-.PHONY: build sim real slam nav explore rviz save-map yolo camera calib calib-report calib-scale semantic test bridge bridge-venv ui ui-deps teleop teleop-nav udev ports net net-check viewer-sync lidar-deps clean
+.PHONY: build sim real slam nav explore rviz save-map yolo yolo-onnx camera calib calib-report calib-scale semantic test bridge bridge-venv ui ui-deps teleop teleop-nav udev ports net net-check viewer-sync lidar-deps clean
 
 build:
 	source /opt/ros/$(ROS_DISTRO)/setup.bash && colcon build --symlink-install
@@ -114,20 +114,62 @@ save-map:
 # processes cannot hold /dev/video0. If a camera IS already up:
 #   make yolo USE_CAMERA=false
 #
-# Inference uses the hand-built venv at ~/yolo/venv (JetPack torch + CUDA).
+# Inference uses the hand-built venv at ~/yolo/venv (JetPack torch + CUDA,
+# plus onnxruntime-gpu for the .onnx path -- the JetPack aarch64 wheel, NOT
+# the PyPI one).
 # The launch puts its site-packages on PYTHONPATH itself: do NOT source the
 # venv's activate first, and NEVER run `uv sync` against it. Rebuild it only
 # with yolo/setup_yolo_venv.sh. See src/my_bot/launch/yolo.launch.py.
 #
-# Swap models:   make yolo MODEL=$(HOME)/yolo/yolov8n.pt
-# Smaller input: make yolo IMGSZ=480
-# No GPU:        make yolo DEVICE=cpu            (demo-day fallback, ~5 Hz)
-# Gate check:    ros2 run my_bot detection_report.py --seconds 300
-MODEL      ?= $(HOME)/yolo/yolo26n.pt
+# THE MODEL IS AN .onnx, BUILT FROM THE .pt HERE. `make yolo` runs yolo-onnx
+# first, which exports $(PT_MODEL) -> $(MODEL) with yolo/export_onnx.py. That
+# export is IDEMPOTENT -- it is skipped when the .onnx is newer than the .pt and
+# its embedded metadata matches IMGSZ and ONNX_HALF -- so a normal bring-up pays
+# nothing for it. Change IMGSZ and it rebuilds, because a static ONNX graph has
+# its input resolution baked in. Unlike a TensorRT .engine, an .onnx is portable
+# and does not die with a JetPack change.
+#
+# The weights are yolo26s, not yolo26n, and the export is fp16 (ONNX_HALF).
+# Both were measured on this board 16 Sep, 640x640, track() wall time:
+#   yolo26n .pt torch    35.5 ms      yolo26s .onnx fp32   45.8 ms
+#   yolo26s .pt torch    36.6 ms      yolo26s .onnx fp16   35.2 ms
+# Two things that table settles. The bigger model is nearly free -- 1.1 ms over
+# nano -- because this pipeline is launch-bound, not compute-bound, the same
+# finding as 14 Sep. And ONNX fp32 is a 9 ms REGRESSION against plain torch;
+# only the fp16 export pays for itself. Do not ship ONNX_HALF=false.
+# Re-run the gate check below after any model change -- 15 Hz is 66.7 ms.
+#
+# Force a rebuild:  make yolo-onnx FORCE=true
+# Export only:      make yolo-onnx
+# Run the .pt:      make yolo MODEL=$(HOME)/yolo/yolo26s.pt    (no export)
+# Swap models:      make yolo PT_MODEL=$(HOME)/yolo/yolov8n.pt MODEL=$(HOME)/yolo/yolov8n.onnx
+# Smaller input:    make yolo IMGSZ=480                        (re-exports)
+# No GPU:           make yolo DEVICE=cpu           (demo-day fallback, ~5 Hz)
+# Gate check:       ros2 run my_bot detection_report.py --seconds 300
+MODEL      ?= $(HOME)/yolo/yolo26s.onnx
+PT_MODEL   ?= $(MODEL:.onnx=.pt)
 IMGSZ      ?= 640
 DEVICE     ?= cuda:0
 USE_CAMERA ?= true
-yolo: build
+ONNX_OPSET ?= 17
+ONNX_HALF  ?= true
+FORCE      ?= false
+YOLO_VENV  ?= $(HOME)/yolo/venv
+
+# Skips itself when MODEL is not an .onnx, so `make yolo MODEL=.../x.pt` still
+# works as it did on Day 5 -- the torch path is the fallback, not dead code.
+yolo-onnx:
+	@if [ "$(suffix $(MODEL))" != ".onnx" ]; then \
+	  echo "MODEL=$(MODEL) is not .onnx -- skipping the export."; \
+	else \
+	  $(YOLO_VENV)/bin/python yolo/export_onnx.py \
+	    --model $(PT_MODEL) --out $(MODEL) --imgsz $(IMGSZ) \
+	    --opset $(ONNX_OPSET) --device $(DEVICE) \
+	    $(if $(filter true,$(ONNX_HALF)),--half,) \
+	    $(if $(filter true,$(FORCE)),--force,); \
+	fi
+
+yolo: build yolo-onnx
 	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
 	source install/setup.bash && \
 	ros2 launch my_bot yolo.launch.py model:=$(MODEL) imgsz:=$(IMGSZ) \

@@ -1,5 +1,8 @@
 # FROZEN 2026-09-09 from the working venv at ~/yolo/venv. REFERENCE ONLY.
 # lap added 14 Sep (tracker dependency, see setup_yolo_venv.sh step 4).
+# Re-frozen 16 Sep: onnxruntime-gpu, onnx, onnxslim for the .onnx model path
+# (D-22), plus their transitive colorama/flatbuffers/ml-dtypes/protobuf.
+# NOTHING ELSE MOVED -- numpy is still 1.26.4 and cv2 still the system 4.5.4.
 #
 # Rebuild with ./setup_yolo_venv.sh, NOT from this file. A freeze records
 # versions; it cannot record ORDER or EXCLUSIONS, and on this platform both
@@ -14,6 +17,10 @@
 #   - numpy is pinned < 2 because the system cv2 is built against 1.x.
 #   - cuda/cudnn/tensorrt/cudss are NOT pip packages here at all. See
 #     setup_yolo_venv.sh step 0 and records/decisions.md D-15.
+#   - onnxruntime-gpu is the JETSON wheel, by direct URL, for the same reason
+#     as torch. PyPI has no aarch64+CUDA build, and plain `onnxruntime` is
+#     CPU-only, imports under the same name, and would drop `make yolo` to a
+#     few Hz with nothing in the log. It is listed below with its URL.
 #
 # NEVER run `uv sync` against this venv. See the recovered uv.lock warning in
 # reference/nvme-recovery-audit.md.
@@ -21,9 +28,11 @@
 certifi==2026.7.22
 charset-normalizer==3.5.1
 cloudpickle==3.1.2
+colorama==0.4.6
 contourpy==1.3.2
 cycler==0.12.1
 filelock==3.32.6
+flatbuffers==25.12.19
 fonttools==4.64.0
 fsspec==2026.7.0
 idna==3.19
@@ -32,14 +41,19 @@ kiwisolver==1.5.1
 lap==0.5.13
 markupsafe==3.0.3
 matplotlib==3.10.9
+ml-dtypes==0.5.4
 mpmath==1.3.0
 networkx==3.4.2
 numpy==1.26.4
 nvidia-ml-py==13.610.43
+onnx==1.22.0
+onnxruntime-gpu @ https://pypi.jetson-ai-lab.io/jp6/cu126/+f/d98/0b934b9a29c1a/onnxruntime_gpu-1.24.0-cp310-cp310-linux_aarch64.whl
+onnxslim==0.1.96
 packaging==26.3
 pillow==12.3.0
 polars==1.44.1
 polars-runtime-32==1.44.1
+protobuf==7.36.1
 psutil==7.2.2
 pyparsing==3.3.2
 python-dateutil==2.9.0.post0

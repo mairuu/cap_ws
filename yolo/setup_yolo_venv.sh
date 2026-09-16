@@ -21,6 +21,11 @@ JETSON_INDEX="https://pypi.jetson-ai-lab.io/jp6/cu126"
 
 TORCH_WHL="$JETSON_INDEX/+f/46b/b8b13f844b211/torch-2.11.0-cp310-cp310-linux_aarch64.whl"
 TV_WHL="$JETSON_INDEX/+f/d11/6f08d3d62417d/torchvision-0.26.0-cp310-cp310-linux_aarch64.whl"
+# onnxruntime for the .onnx model path (make yolo / yolo/export_onnx.py). It must
+# be the JETSON wheel: PyPI's `onnxruntime-gpu` has no aarch64+CUDA build, and
+# plain `onnxruntime` is CPU-only, which would silently drop inference to a few
+# Hz with no error anywhere. Direct URL for the same reason as torch.
+ORT_WHL="$JETSON_INDEX/+f/d98/0b934b9a29c1a/onnxruntime_gpu-1.24.0-cp310-cp310-linux_aarch64.whl"
 
 command -v uv >/dev/null || { echo "uv not installed: curl -LsSf https://astral.sh/uv/install.sh | sh"; exit 1; }
 
@@ -82,11 +87,29 @@ uv pip install --python "$PY" \
     cloudpickle filelock matplotlib pillow pyyaml requests \
     psutil polars nvidia-ml-py ultralytics-thop "numpy<2" "lap>=0.5.12"
 
-echo "== 5. verify =="
+echo "== 5. the ONNX path =="
+# `make yolo` runs an .onnx by default (D-22). Three packages, and the order
+# still matters: install onnxruntime-gpu by direct URL BEFORE onnx/onnxslim, or
+# their resolution can pull PyPI's plain `onnxruntime` in alongside it -- two
+# runtimes in one venv, and the CPU one wins the import.
+#   onnxruntime-gpu  runs the graph (CUDAExecutionProvider)
+#   onnx             writes it, and reads back the metadata export_onnx.py
+#                    checks to decide whether a re-export is needed
+#   onnxslim         ultralytics' graph simplification pass at export
+# "numpy<2" is repeated because onnx's own resolution will otherwise take numpy
+# 2.x and break the system cv2 again -- the same trap as step 3.
+uv pip install --python "$PY" "$ORT_WHL"
+uv pip install --python "$PY" onnx onnxslim "numpy<2"
+
+echo "== 6. verify =="
 source /opt/ros/humble/setup.bash
 "$PY" - <<'EOF'
 import torch, torchvision, cv2, numpy, rclpy, tensorrt, ultralytics
+import onnx, onnxruntime
 assert torch.cuda.is_available(), "torch cannot see the GPU"
+assert "CUDAExecutionProvider" in onnxruntime.get_available_providers(), (
+    "onnxruntime has no CUDA provider -- the CPU wheel got installed instead of "
+    "the Jetson one. `make yolo` would run at a few Hz with no error shown.")
 (torch.randn(256, 256, device='cuda') @ torch.randn(256, 256, device='cuda')).sum().item()
 print(f"  torch        {torch.__version__}  cuda={torch.cuda.is_available()}  {torch.cuda.get_device_name(0)}")
 print(f"  torchvision  {torchvision.__version__}")
@@ -94,6 +117,8 @@ print(f"  tensorrt     {tensorrt.__version__}")
 print(f"  cudnn        {torch.backends.cudnn.version()}")
 print(f"  cv2          {cv2.__version__}   numpy {numpy.__version__}")
 print(f"  ultralytics  {ultralytics.__version__}")
+print(f"  onnx         {onnx.__version__}")
+print(f"  onnxruntime  {onnxruntime.__version__}  {onnxruntime.get_available_providers()}")
 print("  rclpy ok")
 EOF
 echo "== done: $VENV =="

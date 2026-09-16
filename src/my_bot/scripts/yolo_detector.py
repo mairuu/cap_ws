@@ -50,14 +50,24 @@ rclpy/cv_bridge come from the system and torch/ultralytics from the venv. There
 is no `activate`. Running it bare (`ros2 run my_bot yolo_detector.py`) fails
 at `import ultralytics` -- use `make yolo`, or export PYTHONPATH yourself.
 
-MODELS. A .pt is loaded by torch and runs on CUDA directly. A .engine is a
-TensorRT plan and only loads on the TensorRT version that built it; JetPack
-6.1 is TensorRT 10.3, so the recovered engines are dead and any new one must be
-exported on this board (ultralytics `model.export(format="engine")`). Both
-paths work here; `precision` is ignored for engines (baked in at export).
+MODELS. Three formats load here, and `precision` applies to only one of them.
+
+  .onnx    THE DEFAULT since 16 Sep: yolo26s.onnx, built from the .pt by
+           yolo/export_onnx.py, which `make yolo` runs for you. Runs under
+           onnxruntime-gpu's CUDA execution provider. Resolution and precision
+           are BAKED INTO THE GRAPH at export, so `imgsz` and `precision` here
+           must match what it was built with -- the Makefile keeps them in step
+           and re-exports when IMGSZ changes. An .onnx is portable: unlike an
+           engine it does not die with a JetPack change.
+  .pt      Loaded by torch, runs on CUDA directly. The Day 5 path, kept as the
+           fallback: `make yolo MODEL=~/yolo/yolo26s.pt` skips the export.
+  .engine  A TensorRT plan, and it only loads on the TensorRT version that
+           built it -- JetPack 6.1 is TensorRT 10.3, so the recovered engines
+           are dead and a new one must be exported on this board.
 
     make yolo
-    make yolo MODEL=~/yolo/yolov8n.pt IMGSZ=480
+    make yolo MODEL=~/yolo/yolo26s.pt                    # torch fallback
+    make yolo IMGSZ=480                                  # re-exports the .onnx
     ros2 run my_bot detection_report.py --seconds 60     # the gate check
 
 Ctrl-C to stop.
@@ -107,7 +117,7 @@ class YoloDetector(Node):
     def __init__(self):
         super().__init__("yolo_detector")
 
-        self.declare_parameter("model", os.path.expanduser("~/yolo/yolo26n.pt"))
+        self.declare_parameter("model", os.path.expanduser("~/yolo/yolo26s.onnx"))
         self.declare_parameter("device", "cuda:0")
         self.declare_parameter("imgsz", 640)
         self.declare_parameter("conf", 0.5)
@@ -134,16 +144,21 @@ class YoloDetector(Node):
         self._report_period = float(p("report_period"))
 
         if not os.path.exists(self._model_path):
-            self.get_logger().fatal(
-                f"model not found: {self._model_path}. "
-                f"ultralytics downloads a bare name like 'yolo26n.pt' into the "
-                f"cwd on first use; do that once from ~/yolo, then point here.")
+            hint = ("Build it: `make yolo-onnx`, which exports the .pt beside it."
+                    if self._model_path.endswith(".onnx") else
+                    "ultralytics downloads a bare name like 'yolo26s.pt' into the "
+                    "cwd on first use; do that once from ~/yolo, then point here.")
+            self.get_logger().fatal(f"model not found: {self._model_path}. {hint}")
             raise SystemExit(2)
 
-        is_engine = self._model_path.endswith(".engine")
-        if is_engine:
-            # Precision is baked into a TensorRT plan at export; the runtime
-            # flag is meaningless for engines. Keep the log honest.
+        # Precision is baked in at export for both compiled formats, so the
+        # runtime flag is meaningless for them -- and for ONNX it is worse than
+        # meaningless: quantize=16 against an fp32 graph feeds onnxruntime an
+        # fp16 tensor its input does not accept. Keep the log honest and the
+        # dtype right by clearing it.
+        ext = os.path.splitext(self._model_path)[1]
+        fmt = {".engine": "TensorRT engine", ".onnx": "ONNX (onnxruntime)"}.get(ext, "torch")
+        if ext in (".engine", ".onnx"):
             self._quantize = None
 
         if self._device.startswith("cuda") and not torch.cuda.is_available():
@@ -172,9 +187,12 @@ class YoloDetector(Node):
         dev_name = (torch.cuda.get_device_name(0)
                     if self._device.startswith("cuda") else "cpu")
         self.get_logger().info(
-            f"model {self._model_path} ({'TensorRT engine' if is_engine else 'torch'}) "
+            f"model {self._model_path} ({fmt}) "
             f"on {dev_name}; imgsz {self._imgsz}, "
-            f"precision {'fp16' if self._quantize == 16 else 'fp32/native'}, "
+            # For a compiled format the node does not choose the precision --
+            # it is in the graph. Printing "fp32/native" because quantize is
+            # cleared would misreport an fp16 .onnx as fp32 (seen 16 Sep).
+            f"precision {'baked in at export' if ext in ('.engine', '.onnx') else ('fp16' if self._quantize == 16 else 'fp32/native')}, "
             f"conf {self._conf}, iou {self._iou}, tracker {self._tracker}; "
             f"load {load_ms:.0f} ms, warm-up {warm_ms:.0f} ms; "
             f"torch {torch.__version__}")
