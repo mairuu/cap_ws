@@ -107,6 +107,21 @@ Visualization Manager:
         Reliability Policy: Reliable
         Durability Policy: Volatile
         Depth: 100
+    # Labelled semantic landmarks from semantic_objects (Day 6).
+    #
+    # DURABILITY MUST BE TRANSIENT LOCAL. The node publishes /semantic_markers
+    # RELIABLE + TRANSIENT_LOCAL depth 1, and a Volatile display does not match
+    # a Transient Local publisher -- RViz shows NOTHING until the next publish,
+    # which at publish.rate_hz 2.0 looks exactly like "fusion produced no
+    # landmarks". Depth 1 for the same reason: match the publisher.
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Semantic Landmarks
+      Enabled: true
+      Topic:
+        Value: /semantic_markers
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+        Depth: 1
     - Class: rviz_default_plugins/TF
       Name: TF
       Enabled: false
