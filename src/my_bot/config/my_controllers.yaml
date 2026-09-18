@@ -183,36 +183,45 @@ imu_broad:
     # motor noise and this would be several times larger. It is the cheap
     # check that the firmware actually flashed.
     #
-    # RE-MEASURED ON THE RUNNING STACK, same evening, and the rest figure
-    # turned out to understate it by 11x:
-    #     /imu_broad/imu wz over 30 s, robot stationary, motors energized,
-    #     EKF running:  sigma 0.01053 rad/s  ->  variance 1.11e-04
-    # against 1.25e-06 at rest with the stack down. Same chip, same room,
-    # eight minutes apart. THE REST MEASUREMENT IS NOT THE OPERATING NOISE;
-    # energising the drive is most of the difference, and that is the
-    # condition the robot is always in when this value is used.
+    # MEASURE THIS ON THE RUNNING STACK, NEVER AT REST. /imu_broad/imu wz
+    # over 30 s, robot stationary but motors energised, is the condition the
+    # value is used in. At rest with the drive unpowered the same chip reads
+    # 85x quieter (var 1.30e-06), and a covariance set from that figure made
+    # the filter do no smoothing at all -- see the history below, which is
+    # kept because the mistake is easy to repeat.
     #
-    # INSTALLED 1e-4, i.e. the measured value, lightly rounded down. An
-    # earlier 1e-5 -- "8x the rest variance, padded for safety" -- was
-    # overconfident by 11x, and the symptom was visible and specific:
-    # /odometry/filtered's vyaw sigma came back 0.01023 against the raw
-    # gyro's 0.01053, meaning THE FILTER WAS DOING NO SMOOTHING AT ALL. It
-    # tracked gyro noise 1:1 and put 14.8 deg of total yaw path into a
-    # 30 s stationary window whose net drift was 0.028 deg. Telling a
-    # Kalman filter a sensor is three times more precise than it is does
-    # not make the estimate better, it makes the filter believe the noise.
+    # MEASURED 2026-09-18, DLPF_CFG=4:  sigma 0.00481 rad/s (0.276 deg/s)
+    #                                   variance 2.31e-05
     #
-    # At 1e-4 the gyro outvotes wheel yaw rate 100:1, which is the ratio
-    # D-25 designed for. Slip rejection is unchanged -- 100:1 already means
-    # a slipping wheel cannot move the heading estimate -- and an IMU
-    # dropout still leaves the wheels carrying it.
+    # INSTALLED 5e-5, about 2x the measurement. The padding is for ONE
+    # named unknown and no more: the robot was stationary, so vibration
+    # from the wheels actually turning is not in the figure. Re-derive from
+    # the Day 3 loop (check_pose_stability.py, driven) and cut the padding
+    # when that measurement exists.
     #
-    # DO NOT tighten this back toward the rest figure. The number to fix
-    # first is the aliasing that causes the noise: see the DLPF note in
-    # records/calibration.md "IMU". Sampling a 42 Hz-bandwidth signal at
-    # 30 Hz folds everything from 15 to 42 Hz back into the reading, so a
-    # lower DLPF setting in the firmware would cut this honestly, and only
-    # then should the covariance follow it down.
-    static_covariance_angular_velocity: [1.0e-4, 0.0, 0.0, 0.0, 1.0e-4, 0.0, 0.0, 0.0, 1.0e-4]
+    # Gyro outvotes wheel yaw rate 200:1 here, so slip rejection is
+    # unaffected (100:1 was already decisive) and an IMU dropout still
+    # leaves the wheels carrying the heading.
+    #
+    # EXPECT SLIGHTLY MORE YAW JITTER THAN AT 1e-4, NOT LESS. Lowering a
+    # measurement covariance tells the filter to trust the sensor more, so
+    # it smooths less. That is the honest trade: 1e-4 bought smoother output
+    # by pretending the gyro was 4x noisier than measured, which is the same
+    # class of error as the 1e-5 that started this, in the other direction.
+    # Smoothing is the process model's job, not a lie about the sensor.
+    #
+    # HISTORY, all on 18 Sep, all measured:
+    #   1e-5  from rest noise with the stack down. Overconfident 11x. The
+    #         filter tracked gyro noise 1:1 (filtered vyaw sigma 0.01023
+    #         against the gyro's own 0.01053) and put 14.8 deg of total yaw
+    #         path into a stationary 30 s window whose NET drift was 0.03.
+    #   1e-4  from the running stack at DLPF_CFG=3. Correct for that
+    #         firmware; superseded when the firmware changed.
+    #   5e-5  from the running stack at DLPF_CFG=4. Raising the filter from
+    #         42 to 20 Hz against a 30 Hz poll cut the variance 4.8x --
+    #         Nyquist is 15 Hz, so 42 Hz was folding noise back in. Yaw
+    #         jitter fell 3.4x (14.8 -> 4.3 deg of path) and the filter
+    #         began smoothing (ratio 0.81, was 0.97).
+    static_covariance_angular_velocity: [5.0e-5, 0.0, 0.0, 0.0, 5.0e-5, 0.0, 0.0, 0.0, 5.0e-5]
     # Not fused (D-25); published for the record. sigma ~0.1 m/s^2.
     static_covariance_linear_acceleration: [1.0e-2, 0.0, 0.0, 0.0, 1.0e-2, 0.0, 0.0, 0.0, 1.0e-2]
