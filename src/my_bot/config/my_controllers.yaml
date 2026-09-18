@@ -183,22 +183,36 @@ imu_broad:
     # motor noise and this would be several times larger. It is the cheap
     # check that the firmware actually flashed.
     #
-    # INSTALLED 1e-5, which is 8x the measured z variance, NOT the measured
-    # value. Two reasons to inflate, both honest:
-    #   1. Rest noise is not driving noise. Motor and gearbox vibration
-    #      reaches the chip through the chassis and has NOT been measured.
-    #      The measurement that would close this is imu_check.py with the
-    #      robot on blocks and the motors turning under `o`; until then the
-    #      driving figure is an extrapolation and is padded like one.
-    #   2. A static covariance cannot express bias drift. The bias above is
-    #      subtracted as a constant, but MEMS offset walks with temperature,
-    #      and that shows up as unmodelled error in exactly this channel.
-    # Tighten toward 5e-6 (the script's own x4 advice) only after the
-    # motors-running measurement exists. Do not tighten past the measurement.
+    # RE-MEASURED ON THE RUNNING STACK, same evening, and the rest figure
+    # turned out to understate it by 11x:
+    #     /imu_broad/imu wz over 30 s, robot stationary, motors energized,
+    #     EKF running:  sigma 0.01053 rad/s  ->  variance 1.11e-04
+    # against 1.25e-06 at rest with the stack down. Same chip, same room,
+    # eight minutes apart. THE REST MEASUREMENT IS NOT THE OPERATING NOISE;
+    # energising the drive is most of the difference, and that is the
+    # condition the robot is always in when this value is used.
     #
-    # At 1e-5 the gyro outvotes wheel yaw rate 1000:1, so a wheel slip
-    # (D-23) cannot move the heading estimate, while an IMU dropout still
-    # leaves the wheels carrying it.
-    static_covariance_angular_velocity: [1.0e-5, 0.0, 0.0, 0.0, 1.0e-5, 0.0, 0.0, 0.0, 1.0e-5]
+    # INSTALLED 1e-4, i.e. the measured value, lightly rounded down. An
+    # earlier 1e-5 -- "8x the rest variance, padded for safety" -- was
+    # overconfident by 11x, and the symptom was visible and specific:
+    # /odometry/filtered's vyaw sigma came back 0.01023 against the raw
+    # gyro's 0.01053, meaning THE FILTER WAS DOING NO SMOOTHING AT ALL. It
+    # tracked gyro noise 1:1 and put 14.8 deg of total yaw path into a
+    # 30 s stationary window whose net drift was 0.028 deg. Telling a
+    # Kalman filter a sensor is three times more precise than it is does
+    # not make the estimate better, it makes the filter believe the noise.
+    #
+    # At 1e-4 the gyro outvotes wheel yaw rate 100:1, which is the ratio
+    # D-25 designed for. Slip rejection is unchanged -- 100:1 already means
+    # a slipping wheel cannot move the heading estimate -- and an IMU
+    # dropout still leaves the wheels carrying it.
+    #
+    # DO NOT tighten this back toward the rest figure. The number to fix
+    # first is the aliasing that causes the noise: see the DLPF note in
+    # records/calibration.md "IMU". Sampling a 42 Hz-bandwidth signal at
+    # 30 Hz folds everything from 15 to 42 Hz back into the reading, so a
+    # lower DLPF setting in the firmware would cut this honestly, and only
+    # then should the covariance follow it down.
+    static_covariance_angular_velocity: [1.0e-4, 0.0, 0.0, 0.0, 1.0e-4, 0.0, 0.0, 0.0, 1.0e-4]
     # Not fused (D-25); published for the record. sigma ~0.1 m/s^2.
     static_covariance_linear_acceleration: [1.0e-2, 0.0, 0.0, 0.0, 1.0e-2, 0.0, 0.0, 0.0, 1.0e-2]
