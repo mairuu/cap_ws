@@ -64,14 +64,33 @@
                     <param name="use_imu">$(arg use_imu)</param>
                     <param name="imu_poll_divisor">1</param>
                     <!-- Gyro zero-rate offset, RAW COUNTS (131 per deg/s),
-                         subtracted before scaling. UNMEASURED - the three
-                         zeros are placeholders. imu_check.py prints the
-                         line to paste here; the MPU6050 is specified to
-                         +/-20 deg/s of bias, which uncorrected is a heading
-                         drift the EKF would happily integrate. -->
-                    <param name="imu_gyro_bias_x">0</param>
-                    <param name="imu_gyro_bias_y">0</param>
-                    <param name="imu_gyro_bias_z">0</param>
+                         subtracted before scaling.
+
+                         MEASURED 2026-09-18, scripts/imu_check.py, 10 s at
+                         rest with the motors off: -0.805, +1.820 and
+                         -0.623 deg/s. All three well inside the MPU6050's
+                         +/-20 deg/s specification, so this is an ordinary
+                         part. Uncorrected, the z figure alone is 37 deg of
+                         heading drift per minute of standing still, which
+                         the EKF would integrate forever.
+
+                         KEEP THE SIGNS. These are subtracted, so a sign
+                         error does not merely fail to correct the bias, it
+                         doubles it: +81.6 here instead of -81.6 gives
+                         -1.25 deg/s of phantom yaw, 75 deg/min, twice as
+                         bad as leaving the correction out. That transcription
+                         error was made and caught on the day these were
+                         measured. Copy imu_check.py's "gyro bias (raw)" line
+                         verbatim; do not retype it.
+
+                         MEMS bias moves with temperature and these were taken
+                         on a cold board. If heading drifts in odom after a
+                         long warm run, re-take this before touching any EKF
+                         tuning. Re-measure after reseating the board.
+                         Entry: cap_ref records/calibration.md "IMU". -->
+                    <param name="imu_gyro_bias_x">-105.5</param>
+                    <param name="imu_gyro_bias_y">238.4</param>
+                    <param name="imu_gyro_bias_z">-81.6</param>
                 </xacro:unless>
             </hardware>
 

@@ -32,10 +32,18 @@
          accelerometer is not fused (D-25). The lever arm only enters if
          linear acceleration is ever fused, so a tape measure is enough. -->
 
-    <!-- ===== UNMEASURED PLACEHOLDERS - 18 Sep 2026 ===================
-         Every value below is a placeholder until imu_check.py (axes flag) and a
-         tape have been run. The rpy of 0 0 0 asserts the chip's silkscreen
-         x points forward, y left, z up; nothing has confirmed that. -->
+    <!-- ===== ORIENTATION MEASURED 18 Sep 2026; POSITION STILL A TAPE JOB ===
+         The rpy below is MEASURED, and reads 0 0 0 because the chip really is
+         mounted with its axes along the body's. That the value did not change
+         is not the same as the value being unconfirmed: before 18 Sep it was
+         an assumption about a silkscreen, and now it is a measurement. See
+         the joint.
+
+         The xyz is still a placeholder (0, 0, 0.10) and deliberately not
+         chased: angular velocity is identical at every point of a rigid body
+         and the accelerometer is not fused (D-25), so the lever arm enters
+         nothing the EKF computes. It affects only where the box is drawn in
+         RViz. Tape it if that ever matters. -->
 
     <!-- Height of the chip above the FLOOR, and distance from the drive axle
          POSITIVE FORWARD, in the same terms lidar.xacro and camera.xacro use
@@ -51,8 +59,21 @@
     <joint name="imu_joint" type="fixed">
         <parent link="chassis"/>
         <child link="imu_link"/>
-        <!-- rpy: raw chip axes expressed in the body frame. FROM imu_check.py
-             (axes flag), verbatim, once measured. -->
+        <!-- rpy: raw chip axes expressed in the body frame.
+
+             MEASURED 2026-09-18 with `imu_check.py` and its axes flag: the
+             robot was turned CCW by hand, then tipped nose-down, then
+             left-side-down, and the raw axis that responded to each was
+             recorded with its sign. Result: body +x = raw +x, +y = raw +y,
+             +z = raw +z: identity, det +1, a proper rotation. So the chip
+             is mounted x-forward, y-left, z-up, and the 0 0 0 below is a
+             result rather than the assumption it was before that run.
+
+             Re-run the same check after ANY remount. A wrong yaw sign here
+             is invisible in TF and in RViz and makes the EKF worse than no
+             EKF: it weights the gyro 1000:1 over the wheels, so heading
+             would drift at roughly twice the true turn rate and exhaust
+             slam_toolbox's +/-10 deg window in the first corner. -->
         <origin xyz="${imu_offset_x} ${imu_offset_y} ${imu_offset_z}"
                 rpy="0 0 0"/>
     </joint>

@@ -138,8 +138,13 @@ diff_cont:
     #   z, roll, pitch: 1e6, unobservable and ignored in two_d_mode.
     # Pose is NOT fused (odom0_config in ekf.yaml takes twist only, so the
     # EKF integrates its own pose); the diagonal below is for completeness.
-    pose_covariance_diagonal: [0.001, 0.001, 1.0e6, 1.0e6, 1.0e6, 0.01]
-    twist_covariance_diagonal: [1.0e-4, 1.0e-4, 1.0e6, 1.0e6, 1.0e6, 1.0e-2]
+    #
+    # NOTE the unobservable entries are written 1000000.0, not 1.0e6: YAML 1.1
+    # needs a signed exponent (1.0e+6) to parse as a float, so the short form
+    # loads as a STRING and the array becomes mixed-type, which the controller
+    # rejects. Caught here on 18 Sep. Plain decimals cannot be got wrong.
+    pose_covariance_diagonal: [0.001, 0.001, 1000000.0, 1000000.0, 1000000.0, 0.01]
+    twist_covariance_diagonal: [0.0001, 0.0001, 1000000.0, 1000000.0, 1000000.0, 0.01]
 
     # enable_odom_tf is left at its default (true) HERE. With use_ekf:=true
     # the launch file pushes config/diff_cont_ekf_overrides.yaml onto this
@@ -166,11 +171,34 @@ imu_broad:
     # estimate" flag. There is no magnetometer and no filter on this path;
     # the hardware interface exports a constant identity quaternion.
     static_covariance_orientation: [-1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    # Row-major 3x3, rad/s squared. PLACEHOLDER: sigma 0.01 rad/s (0.57 deg/s)
-    # per axis, which is generous for an MPU6050 behind a 42 Hz DLPF at
-    # rest. imu_check.py prints the measured sigma; use sigma^2 times ~4 for
-    # driving (motor vibration). This is the number the EKF weighs the gyro
-    # by, against diff_cont's 1e-2 for wheel yaw rate.
-    static_covariance_angular_velocity: [1.0e-4, 0.0, 0.0, 0.0, 1.0e-4, 0.0, 0.0, 0.0, 1.0e-4]
+    # Row-major 3x3, rad/s squared. This is the number the EKF weighs the gyro
+    # by, against diff_cont's 1e-2 for wheel yaw rate, and the ratio between
+    # the two IS the fusion design (D-25).
+    #
+    # MEASURED 2026-09-18, imu_check.py, 10 s at rest, motors off:
+    #     sigma  x 0.00171  y 0.00145  z 0.00112  rad/s   (z = 0.064 deg/s)
+    #     var    x 2.92e-06 y 2.10e-06 z 1.25e-06
+    # That z sigma is quiet enough to confirm the 42 Hz DLPF is engaged --
+    # with the filter at its power-on default of OFF, 30 Hz sampling aliases
+    # motor noise and this would be several times larger. It is the cheap
+    # check that the firmware actually flashed.
+    #
+    # INSTALLED 1e-5, which is 8x the measured z variance, NOT the measured
+    # value. Two reasons to inflate, both honest:
+    #   1. Rest noise is not driving noise. Motor and gearbox vibration
+    #      reaches the chip through the chassis and has NOT been measured.
+    #      The measurement that would close this is imu_check.py with the
+    #      robot on blocks and the motors turning under `o`; until then the
+    #      driving figure is an extrapolation and is padded like one.
+    #   2. A static covariance cannot express bias drift. The bias above is
+    #      subtracted as a constant, but MEMS offset walks with temperature,
+    #      and that shows up as unmodelled error in exactly this channel.
+    # Tighten toward 5e-6 (the script's own x4 advice) only after the
+    # motors-running measurement exists. Do not tighten past the measurement.
+    #
+    # At 1e-5 the gyro outvotes wheel yaw rate 1000:1, so a wheel slip
+    # (D-23) cannot move the heading estimate, while an IMU dropout still
+    # leaves the wheels carrying it.
+    static_covariance_angular_velocity: [1.0e-5, 0.0, 0.0, 0.0, 1.0e-5, 0.0, 0.0, 0.0, 1.0e-5]
     # Not fused (D-25); published for the record. sigma ~0.1 m/s^2.
     static_covariance_linear_acceleration: [1.0e-2, 0.0, 0.0, 0.0, 1.0e-2, 0.0, 0.0, 0.0, 1.0e-2]

@@ -3,9 +3,13 @@
 #
 # THE DESIGN IN ONE LINE: the wheels say how far, the gyro says how much we
 # turned. During a wheel slip (D-23) the wheels report rotation that did not
-# happen; the gyro does not. With the 100:1 covariance split below (1e-4 here
-# against diff_cont's 1e-2 for wheel vyaw) the gyro carries the heading and
-# the wheels only keep it turning if the IMU drops out.
+# happen; the gyro does not. The split is 1000:1 in the gyro's favour on yaw
+# rate -- but neither number lives in this file. The gyro's variance is
+# imu_broad's static_covariance_angular_velocity (1e-5) and the wheels' is
+# diff_cont's twist_covariance_diagonal (1e-2), both in
+# config/my_controllers.yaml, both commented with their derivation. The gyro
+# therefore carries the heading, and the wheels only keep it turning if the
+# IMU drops out.
 #
 # What is NOT fused: pose from the wheels (the EKF integrates its own, so a
 # slip does not enter as a position jump), the accelerometer (a 2 g MPU6050
