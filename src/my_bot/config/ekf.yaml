@@ -1,0 +1,78 @@
+# robot_localization EKF: wheel odometry + GY-521 gyro -> odom -> base_link.
+# Started by real_robot.launch.py with use_ekf:=true (D-25), never otherwise.
+#
+# THE DESIGN IN ONE LINE: the wheels say how far, the gyro says how much we
+# turned. During a wheel slip (D-23) the wheels report rotation that did not
+# happen; the gyro does not. With the 100:1 covariance split below (1e-4 here
+# against diff_cont's 1e-2 for wheel vyaw) the gyro carries the heading and
+# the wheels only keep it turning if the IMU drops out.
+#
+# What is NOT fused: pose from the wheels (the EKF integrates its own, so a
+# slip does not enter as a position jump), the accelerometer (a 2 g MPU6050
+# on a vibrating chassis is noise the estimate does not need), and any
+# orientation (there is none -- no magnetometer, no filter, and the message
+# says so with orientation_covariance[0] = -1).
+#
+# Frame ownership after this starts:
+#   map  -> odom       slam_toolbox            (unchanged)
+#   odom -> base_link  ekf_filter_node         (was diff_cont; see
+#                                               diff_cont_ekf_overrides.yaml)
+#   base_link -> ...   robot_state_publisher   (unchanged)
+# The tree keeps its shape; only the publisher of one edge changes.
+ekf_filter_node:
+  ros__parameters:
+    # Matches the controller_manager update rate; there is nothing faster to
+    # predict from.
+    frequency: 30.0
+    # A sensor quiet for longer than this is dropped from the update. 0.2 s is
+    # six control cycles: long enough to ride out one stalled USB-serial
+    # frame, short enough that a dead IMU stops being trusted within a scan.
+    sensor_timeout: 0.2
+    two_d_mode: true
+    publish_tf: true
+    publish_acceleration: false
+    print_diagnostics: true
+    transform_time_offset: 0.0
+    transform_timeout: 0.0
+
+    map_frame: map
+    odom_frame: odom
+    base_link_frame: base_link
+    world_frame: odom
+
+    # Config vectors are 15 booleans in this fixed order:
+    #   x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az
+
+    # Wheel odometry: twist only. vx is what the wheels measure well; vy is
+    # published as exactly 0 and is a true constraint; vyaw is fused at 100x
+    # the gyro's variance (see my_controllers.yaml) so it is a fallback, not
+    # a vote.
+    odom0: /diff_cont/odom
+    odom0_config: [false, false, false,
+                   false, false, false,
+                   true,  true,  false,
+                   false, false, true,
+                   false, false, false]
+    odom0_queue_size: 10
+    odom0_differential: false
+    odom0_relative: false
+
+    # Gyro yaw rate, in imu_link, which the EKF rotates into base_link from
+    # TF -- so description/imu.xacro's rpy is load-bearing here.
+    imu0: /imu_broad/imu
+    imu0_config: [false, false, false,
+                  false, false, false,
+                  false, false, false,
+                  false, false, true,
+                  false, false, false]
+    imu0_queue_size: 10
+    imu0_differential: false
+    imu0_relative: false
+    imu0_remove_gravitational_acceleration: true
+
+    # process_noise_covariance and initial_estimate_covariance are left at
+    # robot_localization's defaults deliberately: with only three fused
+    # quantities, the covariance split between the two sensors is what
+    # shapes the estimate, and the defaults are known-sane for a slow
+    # differential drive. Tune only after check_pose_stability.py has been
+    # run with and without the EKF and the numbers say which way to go.

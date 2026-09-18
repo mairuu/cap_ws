@@ -32,12 +32,25 @@ sim: build
 # ydlidar_ros2_driver is built from source -- it is not an apt package, and a
 # missing executable takes the whole launch down, base included:
 #   make real USE_LIDAR=false
+#
+# USE_IMU=true polls the GY-521 through the base controller and publishes
+# /imu_broad/imu. USE_EKF=true additionally fuses it with wheel odometry in
+# robot_localization, which then owns odom -> base_link (D-25). Both default
+# OFF: a bare `make real` is the stack that passed gates 1-6, byte for byte
+# on the serial line. The fused path, for rehearsal against the plain one:
+#   make real USE_IMU=true USE_EKF=true
+# Before the first EKF run:  ros2 run my_bot imu_check.py --axes   (stack DOWN)
+# and paste its bias and rpy into ros2_control.xacro / imu.xacro. An
+# unmeasured yaw-axis sign makes the EKF WORSE than no EKF, quietly.
 LIDAR_PORT ?= /dev/ydlidar
 USE_LIDAR ?= true
+USE_IMU ?= false
+USE_EKF ?= false
 real: build
 	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
 	source install/setup.bash && \
-	ros2 launch my_bot real_robot.launch.py lidar_port:=$(LIDAR_PORT) use_lidar:=$(USE_LIDAR)
+	ros2 launch my_bot real_robot.launch.py lidar_port:=$(LIDAR_PORT) use_lidar:=$(USE_LIDAR) \
+	  use_imu:=$(USE_IMU) use_ekf:=$(USE_EKF)
 
 # Online async SLAM. Starts ONLY the mapper, so `make real` (or `make sim`)
 # must already be running in another terminal -- otherwise there is no /scan

@@ -1,0 +1,13 @@
+# Pushed onto diff_cont by real_robot.launch.py's spawner (--param-file) ONLY
+# when use_ekf:=true. Everything else about the controller stays as
+# my_controllers.yaml says; this file exists so the EKF can take over the
+# odom -> base_link TF edge without a second copy of the whole controller
+# config that would drift from the first.
+#
+# diff_cont keeps publishing /diff_cont/odom -- the EKF consumes it. What it
+# stops doing is broadcasting the transform; ekf_filter_node does that from
+# the fused estimate. Two publishers on one edge make the frame jitter
+# between the two poses, which presents as odometry noise and is not.
+diff_cont:
+  ros__parameters:
+    enable_odom_tf: false

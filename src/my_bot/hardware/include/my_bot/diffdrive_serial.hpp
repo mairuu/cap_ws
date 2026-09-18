@@ -6,6 +6,7 @@
 //   r                     -> "OK"               zero both counters
 //   m <tick_l> <tick_r>   -> "OK"               closed-loop ticks per PID frame
 //   u <Kp>:<Kd>:<Ki>:<Ko> -> "OK"               replace the PID gains
+//   i                     -> "<ax> <ay> <az> <gx> <gy> <gz>"  raw MPU6050 counts
 //
 // The `m` command's units are ticks per *firmware PID frame*, not per second,
 // so `loop_rate` here must match PID_RATE_HZ in the firmware's config.h or
@@ -17,6 +18,13 @@
 // Encoder scaling is per wheel: set enc_counts_per_rev for a shared figure,
 // or enc_counts_per_rev_left / enc_counts_per_rev_right to override either
 // side independently.
+//
+// With use_imu true the GY-521 is polled with `i` on the same link, after
+// the encoder read, and exported as a ros2_control <sensor> in the chip's
+// RAW axes (TF carries the mounting; see description/imu.xacro). IMU trouble
+// is never allowed to fail read(): the wheels are the demo, the IMU is an
+// improvement on them, and a dead I2C bus must degrade to "no IMU", not to
+// "no robot".
 
 #ifndef MY_BOT__DIFFDRIVE_SERIAL_HPP_
 #define MY_BOT__DIFFDRIVE_SERIAL_HPP_
@@ -97,6 +105,27 @@ private:
     int pid_o = 50;
   };
 
+  struct Imu
+  {
+    std::string name;          // <sensor name="..."> in the URDF
+    bool enabled = false;      // use_imu
+    int poll_divisor = 1;      // poll every Nth control cycle
+    unsigned cycle = 0;
+    double gyro_bias_raw[3] = {0.0, 0.0, 0.0};  // imu_gyro_bias_{x,y,z}
+
+    // Exported state, in the RAW chip frame. Orientation is a constant
+    // identity: there is no magnetometer and no filter on this path, and
+    // imu_broad marks it unknown with orientation_covariance[0] = -1.
+    double orientation[4] = {0.0, 0.0, 0.0, 1.0};
+    double angular_velocity[3];     // rad/s, NaN until the first good read
+    double linear_acceleration[3];  // m/s^2, NaN until the first good read
+
+    int consecutive_failures = 0;
+  };
+
+  // Polls `i` once and updates imu_. Never fails the cycle.
+  void read_imu();
+
   // Sends one command and collects its reply. Returns false on I/O failure or
   // timeout; `reply` is only meaningful when it returns true.
   bool exchange(const std::string & command, std::string & reply);
@@ -110,6 +139,7 @@ private:
   Config cfg_;
   Wheel left_;
   Wheel right_;
+  Imu imu_;
   SerialPort serial_;
 
   // Encoder reads can occasionally time out on a busy USB-serial link. One

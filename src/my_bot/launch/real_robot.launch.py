@@ -27,10 +27,10 @@ from launch.actions import (
     RegisterEventHandler,
     TimerAction,
 )
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.event_handlers import OnProcessStart
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import Command, LaunchConfiguration
+from launch.substitutions import Command, LaunchConfiguration, PythonExpression
 from launch_ros.actions import LifecycleNode, Node
 from launch_ros.parameter_descriptions import ParameterValue
 
@@ -40,6 +40,9 @@ def generate_launch_description():
     xacro_file = os.path.join(pkg_path, 'description', 'robot.urdf.xacro')
     controller_params = os.path.join(pkg_path, 'config', 'my_controllers.yaml')
     lidar_params = os.path.join(pkg_path, 'config', 'ydlidar.yaml')
+    ekf_params = os.path.join(pkg_path, 'config', 'ekf.yaml')
+    diff_cont_ekf_overrides = os.path.join(
+        pkg_path, 'config', 'diff_cont_ekf_overrides.yaml')
 
     lidar_port = LaunchConfiguration('lidar_port')
     lidar_port_arg = DeclareLaunchArgument(
@@ -68,12 +71,43 @@ def generate_launch_description():
                     'odometry alone.',
     )
 
+    # IMU and EKF (D-25, 18 Sep 2026). BOTH OFF BY DEFAULT: with neither set,
+    # the serial traffic, the controllers spawned and the TF publishers are
+    # exactly what passed gates 1-6. The fused path is
+    #
+    #   make real USE_IMU=true USE_EKF=true
+    #
+    # use_imu polls the GY-521 through the base controller and spawns
+    # imu_broad (/imu_broad/imu). use_ekf additionally starts
+    # robot_localization on that topic plus /diff_cont/odom, and hands the
+    # odom -> base_link edge to it. An EKF with no IMU would just be wheel
+    # odometry with extra steps, so use_ekf implies use_imu.
+    use_imu = LaunchConfiguration('use_imu')
+    use_imu_arg = DeclareLaunchArgument(
+        'use_imu',
+        default_value='false',
+        description='Poll the GY-521 through the base controller and '
+                    'publish /imu_broad/imu. Off: no `i` traffic at all.',
+    )
+    use_ekf = LaunchConfiguration('use_ekf')
+    use_ekf_arg = DeclareLaunchArgument(
+        'use_ekf',
+        default_value='false',
+        description='Fuse wheel odometry with the gyro in robot_localization '
+                    'and let it publish odom -> base_link. Implies use_imu.',
+    )
+    imu_on = PythonExpression(["'", use_imu, "' == 'true' or '", use_ekf, "' == 'true'"])
+
     # sim_mode:=false selects the DiffDriveSerial plugin in ros2_control.xacro.
+    # use_imu reaches the hardware <param> from here; rsp.launch.py builds its
+    # own copy of the description without it, which is fine -- the sensor is
+    # declared either way and only the hardware interface reads the flag.
     robot_description = ParameterValue(
         Command([
             'xacro ', xacro_file,
             ' use_ros2_control:=true',
             ' sim_mode:=false',
+            ' use_imu:=', imu_on,
         ]),
         value_type=str,
     )
@@ -106,10 +140,38 @@ def generate_launch_description():
         arguments=['joint_broad'],
     )
 
+    # Two spawners for diff_cont, one per TF-ownership regime, because the
+    # override file is a spawner argument and those are fixed per action.
     diff_drive_spawner = Node(
         package='controller_manager',
         executable='spawner',
         arguments=['diff_cont'],
+        condition=UnlessCondition(use_ekf),
+    )
+    diff_drive_spawner_ekf = Node(
+        package='controller_manager',
+        executable='spawner',
+        arguments=['diff_cont', '--param-file', diff_cont_ekf_overrides],
+        condition=IfCondition(use_ekf),
+    )
+
+    imu_broad_spawner = Node(
+        package='controller_manager',
+        executable='spawner',
+        arguments=['imu_broad'],
+        condition=IfCondition(imu_on),
+    )
+
+    # robot_localization. Subscribes to /diff_cont/odom and /imu_broad/imu,
+    # publishes /odometry/filtered and odom -> base_link. It waits for its
+    # inputs, so it can start alongside the spawners.
+    ekf = Node(
+        package='robot_localization',
+        executable='ekf_node',
+        name='ekf_filter_node',
+        parameters=[ekf_params],
+        output='screen',
+        condition=IfCondition(use_ekf),
     )
 
     # The interface sleeps ~2 s on configure waiting out the ESP32's
@@ -120,7 +182,13 @@ def generate_launch_description():
             on_start=[
                 TimerAction(
                     period=5.0,
-                    actions=[joint_broad_spawner, diff_drive_spawner],
+                    actions=[
+                        joint_broad_spawner,
+                        diff_drive_spawner,
+                        diff_drive_spawner_ekf,
+                        imu_broad_spawner,
+                        ekf,
+                    ],
                 )
             ],
         )
@@ -149,6 +217,8 @@ def generate_launch_description():
     return LaunchDescription([
         lidar_port_arg,
         use_lidar_arg,
+        use_imu_arg,
+        use_ekf_arg,
         rsp,
         controller_manager,
         delayed_spawners,

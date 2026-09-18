@@ -22,6 +22,12 @@
   <exec_depend>controller_manager</exec_depend>
   <exec_depend>joint_state_broadcaster</exec_depend>
   <exec_depend>diff_drive_controller</exec_depend>
+  <!-- GY-521 through the base controller (D-25). imu_sensor_broadcaster
+       ships with ros2_controllers; robot_localization is a separate apt
+       package (ros-humble-robot-localization) and only ekf_node needs it,
+       which only use_ekf:=true starts. -->
+  <exec_depend>imu_sensor_broadcaster</exec_depend>
+  <exec_depend>robot_localization</exec_depend>
   <exec_depend>gz_ros2_control</exec_depend>
   <exec_depend>ros_gz_sim</exec_depend>
   <exec_depend>ros_gz_bridge</exec_depend>

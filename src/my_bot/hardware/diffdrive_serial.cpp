@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <limits>
 #include <sstream>
 #include <unordered_map>
 #include <thread>
@@ -30,6 +31,29 @@ std::string param_or(
 // Consecutive failed encoder reads tolerated before the interface gives up
 // and reports an error to the controller manager. At 30 Hz this is ~1 s.
 constexpr int MAX_READ_FAILURES = 30;
+
+// MPU6050 scale at the ranges the firmware pins on every boot
+// (GYRO_CONFIG=0: +/-250 deg/s; ACCEL_CONFIG=0: +/-2 g). Constants rather
+// than parameters on purpose -- the firmware owns the range, and a parameter
+// here that disagreed with it would be a silent 2x/4x/8x/16x.
+constexpr double GYRO_LSB_PER_DPS = 131.0;
+constexpr double ACCEL_LSB_PER_G = 16384.0;
+constexpr double DEG_TO_RAD = M_PI / 180.0;
+constexpr double STANDARD_GRAVITY = 9.80665;
+
+// After this many consecutive failed `i` polls the angular velocity is
+// zeroed rather than held. Holding a stale non-zero yaw rate through an
+// outage would integrate a phantom turn into the EKF; zero makes it coast on
+// the wheels, which is what it did before the IMU existed.
+constexpr int IMU_HOLD_LIMIT = 3;
+
+// ...and after this many, say so once at ERROR level. ~1 s at 30 Hz.
+constexpr int IMU_REPORT_LIMIT = 30;
+
+bool param_bool(const std::string & value)
+{
+  return value == "true" || value == "True" || value == "1";
+}
 
 }  // namespace
 
@@ -79,6 +103,12 @@ hardware_interface::CallbackReturn DiffDriveSerial::on_init(
       cfg_.pid_o = std::stoi(params.at("pid_o"));
       cfg_.set_pid_gains = true;
     }
+
+    imu_.enabled = param_bool(param_or(params, "use_imu", "false"));
+    imu_.poll_divisor = std::stoi(param_or(params, "imu_poll_divisor", "1"));
+    imu_.gyro_bias_raw[0] = std::stod(param_or(params, "imu_gyro_bias_x", "0"));
+    imu_.gyro_bias_raw[1] = std::stod(param_or(params, "imu_gyro_bias_y", "0"));
+    imu_.gyro_bias_raw[2] = std::stod(param_or(params, "imu_gyro_bias_z", "0"));
   } catch (const std::exception & e) {
     RCLCPP_FATAL(logger_, "Bad hardware parameter: %s", e.what());
     return hardware_interface::CallbackReturn::ERROR;
@@ -91,6 +121,35 @@ hardware_interface::CallbackReturn DiffDriveSerial::on_init(
   if (cfg_.loop_rate <= 0.0) {
     RCLCPP_FATAL(logger_, "loop_rate must be positive");
     return hardware_interface::CallbackReturn::ERROR;
+  }
+
+  if (imu_.poll_divisor < 1) {
+    RCLCPP_FATAL(logger_, "imu_poll_divisor must be >= 1");
+    return hardware_interface::CallbackReturn::ERROR;
+  }
+
+  // The sensor is declared in the URDF whether or not use_imu is set, so the
+  // exported interfaces do not change shape with the flag. More than one
+  // sensor is not something this firmware can serve.
+  if (info_.sensors.size() > 1) {
+    RCLCPP_FATAL(logger_, "Expected at most 1 sensor, got %zu", info_.sensors.size());
+    return hardware_interface::CallbackReturn::ERROR;
+  }
+  if (!info_.sensors.empty()) {
+    imu_.name = info_.sensors[0].name;
+    if (info_.sensors[0].state_interfaces.size() != 10) {
+      RCLCPP_FATAL(
+        logger_, "Sensor '%s' needs the 10 IMU state interfaces, got %zu",
+        imu_.name.c_str(), info_.sensors[0].state_interfaces.size());
+      return hardware_interface::CallbackReturn::ERROR;
+    }
+  } else if (imu_.enabled) {
+    RCLCPP_FATAL(logger_, "use_imu is true but the URDF declares no <sensor>");
+    return hardware_interface::CallbackReturn::ERROR;
+  }
+  for (int i = 0; i < 3; ++i) {
+    imu_.angular_velocity[i] = std::numeric_limits<double>::quiet_NaN();
+    imu_.linear_acceleration[i] = std::numeric_limits<double>::quiet_NaN();
   }
 
   if (info_.joints.size() != 2) {
@@ -136,6 +195,14 @@ hardware_interface::CallbackReturn DiffDriveSerial::on_init(
     "Configured for %s @ %d baud, %d/%d counts per rev (L/R), %.1f Hz firmware frame",
     cfg_.device.c_str(), cfg_.baud_rate, left_.counts_per_rev, right_.counts_per_rev,
     cfg_.loop_rate);
+  if (imu_.enabled) {
+    RCLCPP_INFO(
+      logger_, "IMU '%s' polled every %d cycle(s), gyro bias raw (%.1f, %.1f, %.1f)",
+      imu_.name.c_str(), imu_.poll_divisor, imu_.gyro_bias_raw[0], imu_.gyro_bias_raw[1],
+      imu_.gyro_bias_raw[2]);
+  } else {
+    RCLCPP_INFO(logger_, "IMU not polled (use_imu false)");
+  }
 
   return hardware_interface::CallbackReturn::SUCCESS;
 }
@@ -149,6 +216,25 @@ std::vector<hardware_interface::StateInterface> DiffDriveSerial::export_state_in
       wheel->joint_name, hardware_interface::HW_IF_POSITION, &wheel->position);
     interfaces.emplace_back(
       wheel->joint_name, hardware_interface::HW_IF_VELOCITY, &wheel->velocity);
+  }
+
+  // Names must match semantic_components::IMUSensor exactly, in this order.
+  if (!imu_.name.empty()) {
+    const char * const orient[4] = {
+      "orientation.x", "orientation.y", "orientation.z", "orientation.w"};
+    const char * const gyro[3] = {
+      "angular_velocity.x", "angular_velocity.y", "angular_velocity.z"};
+    const char * const accel[3] = {
+      "linear_acceleration.x", "linear_acceleration.y", "linear_acceleration.z"};
+    for (int i = 0; i < 4; ++i) {
+      interfaces.emplace_back(imu_.name, orient[i], &imu_.orientation[i]);
+    }
+    for (int i = 0; i < 3; ++i) {
+      interfaces.emplace_back(imu_.name, gyro[i], &imu_.angular_velocity[i]);
+    }
+    for (int i = 0; i < 3; ++i) {
+      interfaces.emplace_back(imu_.name, accel[i], &imu_.linear_acceleration[i]);
+    }
   }
 
   return interfaces;
@@ -266,6 +352,8 @@ hardware_interface::CallbackReturn DiffDriveSerial::on_configure(
     wheel->command = 0.0;
   }
   consecutive_read_failures_ = 0;
+  imu_.cycle = 0;
+  imu_.consecutive_failures = 0;
 
   RCLCPP_INFO(logger_, "Connected to base controller on %s", cfg_.device.c_str());
   return hardware_interface::CallbackReturn::SUCCESS;
@@ -367,7 +455,60 @@ hardware_interface::return_type DiffDriveSerial::read(
     right_.velocity = (right_.position - right_prev) / dt;
   }
 
+  // After the encoders, never before: the wheel sample is what diff_cont
+  // integrates, and it should be the fresher of the two.
+  if (imu_.enabled && (++imu_.cycle % static_cast<unsigned>(imu_.poll_divisor)) == 0) {
+    read_imu();
+  }
+
   return hardware_interface::return_type::OK;
+}
+
+void DiffDriveSerial::read_imu()
+{
+  std::string reply;
+  long raw[6];
+  bool ok = exchange("i", reply);
+  if (ok) {
+    // "IMU Error" (firmware latched the chip off, or one bad I2C transfer)
+    // parses as nothing, which is the same outcome as a serial timeout.
+    std::istringstream ss(reply);
+    ok = static_cast<bool>(ss >> raw[0] >> raw[1] >> raw[2] >> raw[3] >> raw[4] >> raw[5]);
+  }
+
+  if (!ok) {
+    ++imu_.consecutive_failures;
+    if (imu_.consecutive_failures == IMU_HOLD_LIMIT) {
+      for (int i = 0; i < 3; ++i) {
+        imu_.angular_velocity[i] = 0.0;
+      }
+    }
+    if (imu_.consecutive_failures == IMU_REPORT_LIMIT) {
+      RCLCPP_ERROR(
+        logger_,
+        "No usable IMU reply for %d polls (last: '%s'); angular velocity zeroed, "
+        "odometry unaffected, the EKF is coasting on the wheels",
+        imu_.consecutive_failures, reply.c_str());
+    } else {
+      RCLCPP_WARN_THROTTLE(
+        logger_, clock_, 5000, "IMU poll failed ('%s'); holding", reply.c_str());
+    }
+    return;
+  }
+
+  if (imu_.consecutive_failures >= IMU_REPORT_LIMIT) {
+    RCLCPP_INFO(logger_, "IMU replies resumed after %d polls", imu_.consecutive_failures);
+  }
+  imu_.consecutive_failures = 0;
+
+  // Raw chip axes, unrotated. description/imu.xacro carries the mounting
+  // and robot_localization applies it from TF.
+  for (int i = 0; i < 3; ++i) {
+    imu_.linear_acceleration[i] =
+      static_cast<double>(raw[i]) / ACCEL_LSB_PER_G * STANDARD_GRAVITY;
+    imu_.angular_velocity[i] =
+      (static_cast<double>(raw[3 + i]) - imu_.gyro_bias_raw[i]) / GYRO_LSB_PER_DPS * DEG_TO_RAD;
+  }
 }
 
 hardware_interface::return_type DiffDriveSerial::write(

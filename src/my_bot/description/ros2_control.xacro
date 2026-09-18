@@ -51,6 +51,27 @@
                          `m` command takes ticks per firmware PID frame, so a
                          mismatch silently scales every commanded speed. -->
                     <param name="loop_rate">30</param>
+
+                    <!-- GY-521 over the same serial link (D-25). With use_imu
+                         false the interface never sends `i` and the link
+                         carries exactly the traffic it did for gates 1-6.
+                         With it true, every imu_poll_divisor-th control cycle
+                         issues one `i` after the encoder read: ~45 bytes,
+                         ~8 ms at 57600, on top of the ~6 ms the encoder and
+                         motor exchanges already cost in a 33 ms frame. If
+                         /joint_states drops below 30.0 Hz with the IMU on,
+                         raise the divisor before touching anything else. -->
+                    <param name="use_imu">$(arg use_imu)</param>
+                    <param name="imu_poll_divisor">1</param>
+                    <!-- Gyro zero-rate offset, RAW COUNTS (131 per deg/s),
+                         subtracted before scaling. UNMEASURED - the three
+                         zeros are placeholders. imu_check.py prints the
+                         line to paste here; the MPU6050 is specified to
+                         +/-20 deg/s of bias, which uncorrected is a heading
+                         drift the EKF would happily integrate. -->
+                    <param name="imu_gyro_bias_x">0</param>
+                    <param name="imu_gyro_bias_y">0</param>
+                    <param name="imu_gyro_bias_z">0</param>
                 </xacro:unless>
             </hardware>
 
@@ -71,6 +92,28 @@
                 <state_interface name="velocity"/>
                 <state_interface name="position"/>
             </joint>
+
+            <!-- The ten interfaces imu_sensor_broadcaster's semantic component
+                 expects, by these exact names. Real hardware only: there is
+                 no Gazebo IMU sensor for GazeboSimSystem to bind this to.
+                 Always declared on the real robot, even with use_imu false -
+                 the interfaces then hold NaN and nothing spawns to read them,
+                 so declaring them costs nothing and the URDF does not change
+                 shape with the flag. -->
+            <xacro:unless value="$(arg sim_mode)">
+                <sensor name="imu_sensor">
+                    <state_interface name="orientation.x"/>
+                    <state_interface name="orientation.y"/>
+                    <state_interface name="orientation.z"/>
+                    <state_interface name="orientation.w"/>
+                    <state_interface name="angular_velocity.x"/>
+                    <state_interface name="angular_velocity.y"/>
+                    <state_interface name="angular_velocity.z"/>
+                    <state_interface name="linear_acceleration.x"/>
+                    <state_interface name="linear_acceleration.y"/>
+                    <state_interface name="linear_acceleration.z"/>
+                </sensor>
+            </xacro:unless>
 
         </ros2_control>
 

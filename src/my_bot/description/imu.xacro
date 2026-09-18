@@ -1,0 +1,70 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+    <!-- GY-521 breakout (MPU6050) on the ESP32's I2C bus, read through the
+         base controller's `i` command by the DiffDriveSerial hardware
+         interface and published by imu_sensor_broadcaster as /imu_broad/imu
+         in THIS frame. Added 18 Sep 2026 (D-25).
+
+         THIS FILE IS THE IMU EXTRINSICS, and the rpy is the part that
+         matters. The hardware interface publishes angular velocity and
+         acceleration in the chip's RAW axes, unrotated; robot_localization
+         looks up imu_link -> base_link from TF and rotates them itself. So
+         the mounting orientation lives here, once, and nowhere in code -
+         the same principle D-10 applied to the camera.
+
+         A wrong sign on the yaw axis does not look wrong: the EKF simply
+         weights a gyro that turns the opposite way to the wheels, heading
+         drifts at roughly twice the true turn rate, and slam_toolbox's
+         +/-10 deg matcher window is exhausted in the first corner. It reads
+         as "the EKF made things worse", not as a sign error.
+
+         MEASURE IT. Do not read it off the silkscreen:
+
+             ros2 run my_bot imu_check.py  (its axes flag; stack DOWN, robot in hand)
+
+         which turns/tilts the robot by hand, identifies which raw axis is
+         body x, y and z with sign, checks the result is a proper rotation,
+         and prints the rpy line for the joint below.
+
+         Position matters far less than orientation for what the EKF uses:
+         angular velocity is the same everywhere on a rigid body, and the
+         accelerometer is not fused (D-25). The lever arm only enters if
+         linear acceleration is ever fused, so a tape measure is enough. -->
+
+    <!-- ===== UNMEASURED PLACEHOLDERS - 18 Sep 2026 ===================
+         Every value below is a placeholder until imu_check.py (axes flag) and a
+         tape have been run. The rpy of 0 0 0 asserts the chip's silkscreen
+         x points forward, y left, z up; nothing has confirmed that. -->
+
+    <!-- Height of the chip above the FLOOR, and distance from the drive axle
+         POSITIVE FORWARD, in the same terms lidar.xacro and camera.xacro use
+         because those are what a tape measure returns. -->
+    <xacro:property name="imu_height_above_ground" value="0.10"/>
+    <xacro:property name="imu_offset_from_axle" value="0.0"/>
+    <!-- Lateral offset, POSITIVE LEFT (REP-103). -->
+    <xacro:property name="imu_offset_y" value="0.0"/>
+
+    <xacro:property name="imu_offset_x" value="${wheel_offset_x + imu_offset_from_axle}"/>
+    <xacro:property name="imu_offset_z" value="${wheel_offset_z + imu_height_above_ground - wheel_radius}"/>
+
+    <joint name="imu_joint" type="fixed">
+        <parent link="chassis"/>
+        <child link="imu_link"/>
+        <!-- rpy: raw chip axes expressed in the body frame. FROM imu_check.py
+             (axes flag), verbatim, once measured. -->
+        <origin xyz="${imu_offset_x} ${imu_offset_y} ${imu_offset_z}"
+                rpy="0 0 0"/>
+    </joint>
+
+    <link name="imu_link">
+        <visual>
+            <geometry>
+                <box size="0.021 0.016 0.003"/>
+            </geometry>
+            <material name="black"/>
+        </visual>
+        <!-- No collision, no inertial: a 2 g breakout on a header. -->
+    </link>
+
+</robot>

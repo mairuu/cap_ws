@@ -73,6 +73,11 @@ install(PROGRAMS
   scripts/encoder_report.py
   scripts/motor_check.py
   scripts/boot_check.py
+  # IMU characterisation through the firmware's `i` command: rest bias and
+  # noise for the EKF, `i` round-trip against the serial budget, and the
+  # hands-on raw->body axis identification whose result is imu.xacro's rpy.
+  # Talks to /dev/esp32 directly, so the stack must be DOWN.
+  scripts/imu_check.py
   # Day-2 gate checks. Neither commands motion; both need the ROS stack up.
   scripts/tf_check.py
   scripts/odom_check.py
