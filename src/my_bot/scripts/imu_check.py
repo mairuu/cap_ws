@@ -120,10 +120,25 @@ def drain(ser):
 
 
 def read_line(ser, timeout):
+    """Read one CR/LF-terminated line, returning the instant it is complete.
+
+    Reads `in_waiting` bytes (or one, to block briefly) rather than a fixed
+    block. pyserial's read(n) waits for n bytes OR the port timeout, so
+    read(64) against a ~30 byte reply burns the whole 50 ms timeout every
+    call -- which capped this script at ~19 Hz and made its round-trip
+    figure a measurement of its own timeout rather than of the firmware.
+    The other bring-up scripts share that shape but poll at 10 Hz, where it
+    never mattered; here it did, because the point is to compare `i` against
+    a 33 ms control frame.
+    """
     deadline = time.monotonic() + timeout
     buf = b''
     while time.monotonic() < deadline:
-        buf += ser.read(64)
+        pending = ser.in_waiting
+        chunk = ser.read(pending if pending else 1)
+        if not chunk:
+            continue
+        buf += chunk
         cut = min((buf.find(t) for t in (b'\r', b'\n') if t in buf), default=-1)
         if cut >= 0:
             return buf[:cut].decode('utf-8', 'replace').strip()
