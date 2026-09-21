@@ -55,9 +55,11 @@
 # away while the robot turns before trusting it.
 #
 # There IS one clamp downstream, added 2026-09-11 (D-18): diff_cont limits
-# linear.x to 0.15 m/s and angular.z to 0.5 rad/s in config/my_controllers.yaml.
-# Nav2 still never reaches it -- it exists for a human's hand on teleop -- but
-# the margin is now 1.5x on linear and 2x on yaw, not the 2.7x/4x it was.
+# linear.x to 0.30 m/s and angular.z to 0.5 rad/s in config/my_controllers.yaml.
+# Nav2 never reaches it -- it exists for a human's hand on teleop. That linear
+# figure was 0.15 until 21 Sep, when D-26 raised the teleop ceiling to 0.30 at
+# the user's request; the margin over Nav2 went 1.5x -> 3x on linear. NOTHING
+# ABOUT NAV2'S OWN SPEED CHANGED in D-26 -- max_vel_x below is still 0.10.
 # Below it, hardware/diffdrive_serial.cpp passes commands straight to the ESP32
 # and clamps nothing.
 #

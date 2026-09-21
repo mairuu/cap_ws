@@ -109,10 +109,12 @@ diff_cont:
     # integrated from encoder positions (position_feedback, default true;
     # open_loop, default false -- both deliberately left at defaults).
     #
-    # Nav2 never reaches these. velocity_smoother caps at 0.055 m/s and
-    # 0.125 rad/s, behavior_server.max_rotational_vel is 0.1 rad/s, so goal
+    # Nav2 never reaches these. velocity_smoother caps at 0.10 m/s and
+    # 0.25 rad/s, behavior_server.max_rotational_vel is 0.2 rad/s, so goal
     # navigation and recoveries are unchanged. The ceiling exists for a
-    # human's hand on the keyboard, not for the planner.
+    # human's hand on the keyboard, not for the planner. (Those Nav2 figures
+    # were 0.055 / 0.125 / 0.1 until 21 Sep; the margin is now 3x on linear
+    # and 2.5x on yaw.)
     #
     # min_velocity must be given explicitly: the controller refuses to apply a
     # limit with only max_velocity set ("Cannot apply velocity limits if
@@ -151,9 +153,15 @@ diff_cont:
     # controller at spawn time, which sets it false so the EKF owns
     # odom -> base_link. Two publishers on one TF edge make the frame jitter
     # between them, which looks like odometry noise and is not.
+    #
+    # RAISED 0.15 -> 0.30 on 2026-09-21, at the user's request, so that teleop
+    # can actually be driven at 0.30 m/s. The ceiling and the guard had to move
+    # together: the guard clamps the human channel at teleop_max_linear and THIS
+    # clamps every channel, so either one left at its old value silently wins.
+    # See D-26 for the shear budget this spends and what to watch.
     linear.x.has_velocity_limits: true
-    linear.x.max_velocity: 0.15
-    linear.x.min_velocity: -0.15
+    linear.x.max_velocity: 0.30
+    linear.x.min_velocity: -0.30
     angular.z.has_velocity_limits: true
     angular.z.max_velocity: 0.5
     angular.z.min_velocity: -0.5

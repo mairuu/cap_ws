@@ -78,8 +78,9 @@ slam: build
 # (see the teleop-nav comment below). Passed through on every `make nav` so
 # `make nav TELEOP_MAX_LINEAR=0.3` works -- before 21 Sep these were documented
 # but never forwarded, so the launch defaults silently won.
-# Ceiling: diff_cont clamps to 0.15 / 0.5 in config/my_controllers.yaml (D-18).
-TELEOP_MAX_LINEAR  ?= 0.10
+# Ceiling: diff_cont clamps to 0.30 / 0.5 in config/my_controllers.yaml
+# (D-18, raised 0.15 -> 0.30 on 21 Sep by D-26).
+TELEOP_MAX_LINEAR  ?= 0.30
 TELEOP_MAX_ANGULAR ?= 0.50
 nav: build
 	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
@@ -363,8 +364,10 @@ ports:
 # full 100 ms and the stamp is already ~88 ms old at receipt, so 0.5 m/s shears
 # each scan by ~8.7 cm along the path. No rigid transform absorbs that, and
 # optimisation can move a scan's pose but cannot un-shear the scan, so the
-# doubled wall stays drawn. diff_cont's ceiling (0.15 m/s) stops `q` running
-# away, but mapping wants 0.10.
+# doubled wall stays drawn. diff_cont's ceiling (0.30 m/s since 21 Sep, D-26)
+# stops `q` running away, but MAPPING STILL WANTS 0.10 -- this target has no
+# speed guard in front of it, so `q` here really does reach 0.30. Drive a
+# mapping run with  make teleop SPEED=0.10.
 teleop:
 	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
 	ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r /cmd_vel:=/diff_cont/cmd_vel_unstamped \
@@ -382,11 +385,16 @@ teleop:
 #
 # Press k (or anything with zero velocity) to stop. Hold the terminal focused.
 #
-# SPEED is the STARTING speed, 0.10 m/s rather than teleop_twist_keyboard's own
-# 0.5. That 0.5 is what smeared the Day 3 map: the X3 Pro sweeps 360 deg in
-# ~86 ms and slam_toolbox does not deskew, so at 0.5 m/s every scan is sheared
-# 8.7 cm along the path and no rigid transform can absorb it. The same floor
-# mapped clean at 0.10. Nav2 itself drives at 0.055.
+# SPEED is the STARTING speed. Raised to 0.30 on 21 Sep (D-26) to match the
+# guard, so the first keypress already gives the speed that was asked for.
+#
+# THE MAPPING SPEED IS STILL 0.10. The X3 Pro sweeps 360 deg in ~86 ms and
+# slam_toolbox does not deskew, so each scan shears by (speed x sweep):
+# 0.9 cm at 0.10, 2.6 cm at 0.30, 8.7 cm at teleop's stock 0.5 -- and 0.5 is
+# what smeared the Day 3 map on 9 and 10 Sep. Optimisation can move a scan's
+# pose but cannot un-shear it. For a run that is BUILDING a map:
+#   make teleop-nav SPEED=0.10
+# Nav2 itself drives at 0.10.
 #
 # THE ACTUAL LIMIT IS NOT HERE. This publishes to /cmd_vel_teleop_raw, and
 # teleop_speed_guard (launched by navigation.launch.py, next to twist_mux)
@@ -395,11 +403,12 @@ teleop:
 # and shows the new value only in this terminal, which nobody watches while
 # looking at RViz, so a default alone does not prevent a ruined map.
 #
-# Raise the real limit deliberately, at launch, not with a keypress:
-#   make nav TELEOP_MAX_LINEAR=0.3
+# Change the real limit deliberately, at launch, not with a keypress:
+#   make nav TELEOP_MAX_LINEAR=0.10        # back to the mapping speed
 #
-# 0.15 m/s is the hard ceiling -- diff_cont clamps there (D-18,
-# config/my_controllers.yaml) and no launch argument can lift it.
+# 0.30 m/s is the hard ceiling -- diff_cont clamps there (D-18 as amended by
+# D-26, config/my_controllers.yaml) and no launch argument can lift it. Going
+# above 0.30 means editing that file, rebuilding, and restarting `make real`.
 #
 # This does NOT weaken the e-stop -- `k` sends a zero Twist and the guard
 # passes zero through unclamped, at any limit.
@@ -407,7 +416,7 @@ teleop:
 # NOTE `make nav` must be running, or nothing subscribes to _raw and the robot
 # will not move at all. That is deliberate: the guard and twist_mux are one
 # safety chain and neither should run without the other.
-SPEED ?= 0.10
+SPEED ?= 0.30
 TURN  ?= 0.5
 teleop-nav:
 	source /opt/ros/$(ROS_DISTRO)/setup.bash && \

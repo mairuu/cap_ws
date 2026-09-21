@@ -67,11 +67,13 @@ def generate_launch_description():
 
     teleop_max_linear_arg = DeclareLaunchArgument(
         'teleop_max_linear',
-        default_value='0.10',
+        default_value='0.30',
         description='Hard cap on human teleop linear speed, m/s. This is a '
                     'LIMIT, not a default -- teleop_twist_keyboard cannot '
-                    'exceed it with `q`. 0.10 is the mapping speed; above it '
-                    'scan shear starts smearing the map.',
+                    'exceed it with `q`. Raised 0.10 -> 0.30 on 21 Sep (D-26); '
+                    '0.10 is still the MAPPING speed, above it scan shear '
+                    'starts smearing the map. diff_cont clamps at 0.30 too, so '
+                    'nothing above this value reaches the wheels.',
     )
 
     teleop_max_angular_arg = DeclareLaunchArgument(

@@ -4,17 +4,21 @@
 WHY THIS EXISTS. teleop_twist_keyboard's `q` multiplies its speed by 1.1 and
 `z` divides it, PERMANENTLY -- there is no auto-reset -- and the current value
 is echoed only in the teleop terminal, which nobody is looking at while they
-watch RViz. `make teleop-nav` starts at SPEED=0.10, but a default is not a
+watch RViz. `make teleop-nav` starts at SPEED, but a default is not a
 limit: one stray keypress and the rest of the run is faster, with no indication
 anywhere the driver is looking.
 
 That is not cosmetic. The X3 Pro sweeps 360 deg in ~86 ms and slam_toolbox does
 not deskew, so every scan is sheared along the path by (speed x sweep time):
-1.0 cm at Nav2's 0.055 m/s, 0.9 cm at 0.10, but 8.7 cm at teleop's stock 0.5.
-Sheared scans enter the pose graph and STAY there -- optimisation can move a
-scan's pose, it cannot un-shear the scan -- so a few seconds of fast driving
-leaves a doubled wall that slowing down will not undo. That is exactly how the
-10 Sep gate run was lost.
+0.9 cm at the 0.10 m/s mapping speed, 2.6 cm at the 0.30 limit set on 21 Sep,
+and 8.7 cm at teleop's stock 0.5. Sheared scans enter the pose graph and STAY
+there -- optimisation can move a scan's pose, it cannot un-shear the scan -- so
+a few seconds of fast driving leaves a doubled wall that slowing down will not
+undo. That is exactly how the 10 Sep gate run was lost.
+
+The limit is 0.30 because that is what was asked for; it is NOT a claim that
+0.30 maps as cleanly as 0.10. It spends about 3x the shear budget. Drive the
+mapping runs slowly and keep the speed for repositioning.
 
 WHERE IT SITS.
 
@@ -54,8 +58,13 @@ from geometry_msgs.msg import Twist
 
 # Matches the Makefile's SPEED/TURN defaults for teleop-nav. The guard is the
 # limit; the teleop default is only a convenience so the first keypress is
-# already correct.
-DEFAULT_MAX_LINEAR = 0.10
+# already correct. Keep these three in step -- here, navigation.launch.py's
+# teleop_max_linear default, and the Makefile's TELEOP_MAX_LINEAR/SPEED.
+#
+# RAISED 0.10 -> 0.30 on 2026-09-21 at the user's request (D-26). diff_cont's
+# own ceiling moved 0.15 -> 0.30 in the same change, so this is now the binding
+# limit on the human channel again rather than a limit under a lower one.
+DEFAULT_MAX_LINEAR = 0.30
 DEFAULT_MAX_ANGULAR = 0.50
 
 IN_TOPIC = '/cmd_vel_teleop_raw'
