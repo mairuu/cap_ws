@@ -1,0 +1,93 @@
+# explore_lite (m-explore-ros2) tuned for my_bot.
+#
+# This is the top layer: it does NOT drive the robot. It watches slam_toolbox's
+# /map, finds frontiers (the boundary between mapped free space and unknown
+# space), picks the best one, and sends it to Nav2 as an ordinary
+# NavigateToPose goal. Nav2 does the driving. So the chain is:
+#
+#   slam_toolbox -> /map -> explore_lite -> NavigateToPose -> Nav2 -> twist_mux
+#                                                                       -> wheels
+#
+# If Nav2 cannot reach a clicked goal in RViz, explore_lite will not work
+# either -- debug that first.
+#
+# Upstream defaults live in src/m-explore-ros2/explore/config/params.yaml.
+# Deltas are marked TUNED. The node is namespaced /** so this file applies
+# regardless of the node name the launch gives it.
+#
+# THE PACKAGE ITSELF IS NOT IN THIS WORKSPACE as of 21 Sep, and apt has no
+# ros-humble-explore-lite -- the ROS 2 port is source-only. package.xml
+# already carries the exec_depend, so `make explore` fails at launch with
+# "package 'explore_lite' not found" until m-explore-ros2 is cloned into src/
+# and built. This file and explore.launch.py came back from the 8 Sep NVMe
+# recovery mount, which the cap_ws rebuild missed.
+
+/**:
+  ros__parameters:
+    # Must match the robot_base_frame in nav2_params.yaml. base_footprint
+    # would also resolve, but keeping both files on base_link means one less
+    # thing to keep in sync.
+    #
+    # CORRECTED 21 Sep: this used to call base_footprint "an identity child of
+    # base_link". It is not. base_link sits on the wheel AXLE and
+    # robot_core.xacro drops base_footprint by one wheel_radius (0.0327 m) --
+    # the same error the mapper params fixed on 9 Sep (D-13). The choice below
+    # is unaffected; only the reason given for it was wrong.
+    robot_base_frame: base_link
+
+    # The map to find frontiers in. This is slam_toolbox's /map, NOT Nav2's
+    # global costmap -- explore_lite wants raw occupancy (with -1 unknown), and
+    # the costmap has already inflated obstacles and may mark unknown as
+    # lethal, which would hide every frontier.
+    costmap_topic: map
+    costmap_updates_topic: map_updates
+
+    # Publishes frontier markers on /explore/frontiers. Add that topic as a
+    # MarkerArray in RViz to watch which frontier it picks and why -- this is
+    # by far the fastest way to debug "why did it go THERE".
+    visualize: true
+
+    # SCALED WITH SPEED, twice, and now back at upstream's 0.15 (replan every
+    # ~6.7 s). It was cut to 0.1 when Nav2 was capped at 0.055 m/s, where a
+    # frontier 2 m away was a ~36 s journey and replanning against it invited
+    # thrashing between two equally good frontiers. Nav2 drives at 0.10 m/s as
+    # of 21 Sep, the same 2 m is ~20 s, and upstream's figure is in range
+    # again: responsive to newly discovered space at the pace the robot can
+    # actually travel.
+    planner_frequency: 0.15
+
+    # How long the robot may make no progress toward a frontier before that
+    # frontier is blacklisted and it picks another.
+    #
+    # SCALED WITH SPEED, and this one is not optional. The invariant is
+    # DISTANCE, not time: upstream's 30 s at upstream's 0.22 m/s is ~6.6 m of
+    # travel, which only runs out when the robot is genuinely stuck, so every
+    # retune keeps that 6.6 m. At 0.055 m/s it took 120 s; at 0.10 m/s it
+    # takes 66 s (21 Sep).
+    #
+    # Set it by time instead and it fires on healthy runs: 30 s at 0.055 m/s
+    # is 1.65 m, which a robot picking its way around one chair can easily
+    # fail to cover, and explore then blacklists good frontiers one after
+    # another and gives up with the room half mapped.
+    progress_timeout: 66.0
+
+    # Frontier scoring: cost = potential_scale*distance - gain_scale*size.
+    # Higher potential_scale prefers NEAR frontiers, higher gain_scale prefers
+    # BIG ones. Defaults favour nearby frontiers, which keeps the robot from
+    # crossing the whole room every time -- good for a slow robot.
+    potential_scale: 3.0
+    gain_scale: 1.0
+    orientation_scale: 0.0
+
+    transform_tolerance: 0.3
+
+    # TUNED: upstream 0.75 m. That is wider than an interior doorway, so
+    # openings the robot could actually fit through (it is 0.29 m wide) were
+    # scored as too small to be worth exploring and whole rooms went unmapped.
+    # 0.3 m still filters out single-cell noise on the map boundary.
+    min_frontier_size: 0.3
+
+    # Drive back to the starting pose once there are no frontiers left. Makes
+    # the end of an exploration run unambiguous during a demo -- the robot
+    # coming home is the "done" signal.
+    return_to_init: true
