@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 ROS_DISTRO ?= humble
 
-.PHONY: build sim real slam nav explore rviz save-map bag bag-play yolo yolo-onnx camera calib calib-report calib-scale semantic test bridge bridge-venv ui ui-deps teleop teleop-nav udev ports net net-check viewer-sync lidar-deps clean
+.PHONY: build sim real slam nav explore rviz save-map bag bag-play yolo yolo-onnx camera calib calib-report calib-scale semantic test bridge bridge-venv ui ui-deps teleop teleop-nav udev ports net net-check viewer-sync lidar-deps explore-deps clean
 
 build:
 	source /opt/ros/$(ROS_DISTRO)/setup.bash && colcon build --symlink-install
@@ -498,6 +498,44 @@ lidar-deps:
 	@if [ ! -d src/ydlidar_ros2_driver ]; then 		git clone -b humble https://github.com/YDLIDAR/ydlidar_ros2_driver.git 			src/ydlidar_ros2_driver; 	fi
 	@branch=$$(git -C src/ydlidar_ros2_driver rev-parse --abbrev-ref HEAD); 	if [ "$$branch" != humble ]; then 		echo "ERROR: src/ydlidar_ros2_driver is on '$$branch', not 'humble'."; 		echo "       master is Dashing-era and will not run on Humble."; 		echo "       git -C src/ydlidar_ros2_driver checkout humble"; 		exit 1; 	fi
 	$(MAKE) build
+
+# explore_lite (m-explore-ros2): the frontier chooser that `make explore` runs.
+# It is the only piece of that stack we did not write, and it is NOT IN APT --
+# there is no ros-humble-explore-lite, the ROS 2 port is source-only, so
+# package.xml's exec_depend on it can never be satisfied by rosdep. Without
+# this target `make explore` dies at launch with "package 'explore_lite' not
+# found".
+#
+# STAY ON main. The repo also carries a feature/slam_toolbox_compat branch
+# whose name makes it look like the one for this robot. Read its log before
+# believing that: the tip three commits are "cursor attempt", "First Attempt
+# but seg fault" and "logs". main is what works here -- explore_lite reads
+# slam_toolbox's /map directly as an occupancy grid, which is what
+# costmap_topic in config/explore_params.yaml selects, and needs no special
+# support for it.
+#
+# Only the two packages we use are built. The repo also ships
+# multirobot_map_merge, for fusing maps from several robots, which drags in
+# image_geometry for a feature this project has no use for.
+#
+# Verified 21 Sep 2026: main @ 326cf8a, clean build on Humble in 69 s, all
+# twelve parameters in explore_params.yaml declared by that revision.
+# Re-running this is safe -- the clone is skipped if it is already there.
+explore-deps:
+	@if [ ! -d src/m-explore-ros2 ]; then \
+		git clone https://github.com/robo-friends/m-explore-ros2.git \
+			src/m-explore-ros2; \
+	fi
+	@branch=$$(git -C src/m-explore-ros2 rev-parse --abbrev-ref HEAD); \
+	if [ "$$branch" != main ]; then \
+		echo "ERROR: src/m-explore-ros2 is on '$$branch', not 'main'."; \
+		echo "       feature/slam_toolbox_compat is unfinished -- see above."; \
+		echo "       git -C src/m-explore-ros2 checkout main"; \
+		exit 1; \
+	fi
+	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
+	colcon build --symlink-install \
+	  --packages-select explore_lite_msgs explore_lite
 
 # ---------------------------------------------------------------------------
 # Day 6 -- semantic fusion, bridge, UI

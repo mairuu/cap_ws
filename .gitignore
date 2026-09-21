@@ -17,3 +17,9 @@ bin/
 # Makefile target reproduces it exactly. Vendoring it would bury a 3000-line
 # upstream diff in our history for no gain.
 /src/ydlidar_ros2_driver/
+
+# Third-party, built from source by `make explore-deps` at upstream main.
+# Same reasoning as the lidar driver above: a pristine upstream checkout
+# (main @ 326cf8a), not a fork we maintain. The frontier chooser only --
+# multirobot_map_merge in the same repo is not built.
+/src/m-explore-ros2/
