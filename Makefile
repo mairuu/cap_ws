@@ -74,10 +74,19 @@ slam: build
 # autonomous run at any time and is the only e-stop the robot has:
 #   ros2 run teleop_twist_keyboard teleop_twist_keyboard \
 #     --ros-args -r /cmd_vel:=/cmd_vel_teleop
+# TELEOP_MAX_* are the HARD caps teleop_speed_guard applies to /cmd_vel_teleop_raw
+# (see the teleop-nav comment below). Passed through on every `make nav` so
+# `make nav TELEOP_MAX_LINEAR=0.3` works -- before 21 Sep these were documented
+# but never forwarded, so the launch defaults silently won.
+# Ceiling: diff_cont clamps to 0.15 / 0.5 in config/my_controllers.yaml (D-18).
+TELEOP_MAX_LINEAR  ?= 0.10
+TELEOP_MAX_ANGULAR ?= 0.50
 nav: build
 	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
 	source install/setup.bash && \
-	ros2 launch my_bot navigation.launch.py use_sim_time:=$(SIM_TIME)
+	ros2 launch my_bot navigation.launch.py use_sim_time:=$(SIM_TIME) \
+	  teleop_max_linear:=$(TELEOP_MAX_LINEAR) \
+	  teleop_max_angular:=$(TELEOP_MAX_ANGULAR)
 
 # Frontier exploration: the robot picks its own goals and maps the room
 # unattended. Sits on top of Nav2 and drives nothing itself, so ALL THREE of
@@ -387,7 +396,10 @@ teleop:
 # looking at RViz, so a default alone does not prevent a ruined map.
 #
 # Raise the real limit deliberately, at launch, not with a keypress:
-#   make nav TELEOP_MAX_LINEAR:=0.3
+#   make nav TELEOP_MAX_LINEAR=0.3
+#
+# 0.15 m/s is the hard ceiling -- diff_cont clamps there (D-18,
+# config/my_controllers.yaml) and no launch argument can lift it.
 #
 # This does NOT weaken the e-stop -- `k` sends a zero Twist and the guard
 # passes zero through unclamped, at any limit.

@@ -39,10 +39,21 @@
 # ---------------------------------------------------------------------------
 #
 # SPEEDS: max_vel_x 0.055 / max_vel_theta 0.125, with the velocity_smoother
-# clamped to the same pair. Nothing downstream clamps them -- diff_cont sets no
-# limits and hardware/diffdrive_serial.cpp passes commands straight to the ESP32
-# -- so these params are the only speed limit the robot has. Raise them only
-# after watching it drive.
+# clamped to the same pair. These are the limits Nav2 actually drives at, and
+# raising them means raising BOTH (FollowPath below and velocity_smoother at the
+# bottom) plus the matching acc_lim_* -- and reducing sim_time, which was raised
+# to 5.0 only because the lookahead DISTANCE is sim_time * max_vel_x. Raise them
+# only after watching it drive.
+#
+# There IS one clamp downstream, added 2026-09-11 (D-18): diff_cont limits
+# linear.x to 0.15 m/s and angular.z to 0.5 rad/s in config/my_controllers.yaml.
+# Nav2 never reaches it -- it exists for a human's hand on teleop -- but it is a
+# hard ceiling on anything raised here. Below it, hardware/diffdrive_serial.cpp
+# passes commands straight to the ESP32 and clamps nothing.
+#
+# CORRECTED 21 Sep: this note used to say "diff_cont sets no limits ... these
+# params are the only speed limit the robot has". True when written, false since
+# D-18 ten days earlier.
 #
 # CORRECTED 10 Sep: this note previously quoted "max_vel_x 0.22 / max_vel_theta
 # 1.0" as our values. Those are UPSTREAM's defaults; the file was cut ~4x below
