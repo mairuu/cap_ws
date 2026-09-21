@@ -38,18 +38,28 @@
 # both are set, footprint wins and robot_radius is silently ignored.
 # ---------------------------------------------------------------------------
 #
-# SPEEDS: max_vel_x 0.055 / max_vel_theta 0.125, with the velocity_smoother
+# SPEEDS: max_vel_x 0.10 / max_vel_theta 0.25, with the velocity_smoother
 # clamped to the same pair. These are the limits Nav2 actually drives at, and
 # raising them means raising BOTH (FollowPath below and velocity_smoother at the
-# bottom) plus the matching acc_lim_* -- and reducing sim_time, which was raised
-# to 5.0 only because the lookahead DISTANCE is sim_time * max_vel_x. Raise them
-# only after watching it drive.
+# bottom) plus the matching acc_lim_*, and revisiting sim_time, because the
+# lookahead DISTANCE is sim_time * max_vel_x.
+#
+# RAISED 21 Sep from 0.055 / 0.125. 0.055 was half the speed this project
+# already trusts a human with: navigation.launch.py caps teleop at 0.10 and
+# calls that "the mapping speed; above it scan shear starts smearing the map",
+# which is a budget that was measured rather than guessed. Nav2 had no reason
+# to sit below it, and 0.055 m/s costs 18 s per metre of exploration.
+#
+# The YAW figure is the one to back off first if the map smears. The arithmetic
+# on max_vel_theta below is arithmetic, not a measurement -- watch a wall 4 m
+# away while the robot turns before trusting it.
 #
 # There IS one clamp downstream, added 2026-09-11 (D-18): diff_cont limits
 # linear.x to 0.15 m/s and angular.z to 0.5 rad/s in config/my_controllers.yaml.
-# Nav2 never reaches it -- it exists for a human's hand on teleop -- but it is a
-# hard ceiling on anything raised here. Below it, hardware/diffdrive_serial.cpp
-# passes commands straight to the ESP32 and clamps nothing.
+# Nav2 still never reaches it -- it exists for a human's hand on teleop -- but
+# the margin is now 1.5x on linear and 2x on yaw, not the 2.7x/4x it was.
+# Below it, hardware/diffdrive_serial.cpp passes commands straight to the ESP32
+# and clamps nothing.
 #
 # CORRECTED 21 Sep: this note used to say "diff_cont sets no limits ... these
 # params are the only speed limit the robot has". True when written, false since
@@ -61,6 +71,19 @@
 # FollowPath are the ones that were kept current -- trust the VALUES, and the
 # comments sitting next to them, over this header. (Same failure as the encoder
 # -split comment in ros2_control.xacro: see reference/nvme-recovery-audit.md.)
+#
+# RETUNED 21 Sep, throughput pass. The speeds above, plus three defects found
+# while checking them against the installed dwb sources in /opt/ros/humble:
+#
+#   - FollowPath scored obstacles with BaseObstacle alone, which reads the cost
+#     of the one cell under base_link. That is a circular-robot test. This
+#     robot's inscribed radius is 0.09 -- the FRONT edge -- while it is 0.147
+#     half-wide and reaches 0.265 behind base_link, so a trajectory could put a
+#     rear corner 17 cm inside a wall and score clean. ObstacleFootprint now
+#     runs alongside it, and inflation_radius covers the circumscribed radius.
+#   - trans_stopped_velocity sat ABOVE max_vel_x again: 0.0625 against 0.055,
+#     the same defect its own comment describes having fixed.
+#   - progress_checker and the recovery spin were still scaled to 0.055.
 
 bt_navigator:
   ros__parameters:
@@ -146,9 +169,15 @@ controller_server:
   ros__parameters:
     use_sim_time: false
     # TUNED: upstream 20.0. The Jetson also runs slam_toolbox and (optionally)
-    # TensorRT YOLO. 10 Hz is plenty for a robot capped at 0.22 m/s and leaves
-    # headroom. If the controller logs "control loop missed its desired rate",
-    # lower this before touching anything else.
+    # TensorRT YOLO. 10 Hz is plenty for a robot capped at 0.10 m/s -- one
+    # control cycle is 1 cm of travel -- and it leaves headroom. If the
+    # controller logs "control loop missed its desired rate", lower this before
+    # touching anything else; after that the cheapest cut is angular_granularity
+    # in FollowPath, which sets how many poses each trajectory is rasterised at.
+    #
+    # CORRECTED 21 Sep: this said "capped at 0.22 m/s", which is upstream's
+    # figure and never ours. It survived the 10 Sep sweep that fixed the same
+    # claim in the header.
     controller_frequency: 10.0
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
@@ -168,11 +197,12 @@ controller_server:
       plugin: "nav2_controller::SimpleProgressChecker"
       required_movement_radius: 0.5
       # SCALED WITH SPEED. This asks the robot to cover 0.5 m within the
-      # allowance or navigation aborts. At the old 0.22 m/s that was a
-      # 2.3 s job with 10 s of slack; at 0.055 m/s it takes 9.1 s, so 10 s
-      # left almost no margin and any cornering would have tripped it.
+      # allowance or navigation aborts. Upstream's 10 s is sized for upstream's
+      # 0.22 m/s, a 2.3 s job; at 0.10 m/s the same 0.5 m takes 5.0 s.
       # Keep this >= 4x the time 0.5 m actually takes.
-      movement_time_allowance: 40.0
+      #
+      # 20.0 as of 21 Sep, down from the 40.0 that 0.055 m/s needed.
+      movement_time_allowance: 20.0
 
     general_goal_checker:
       stateful: True
@@ -187,58 +217,139 @@ controller_server:
       plugin: "dwb_core::DWBLocalPlanner"
       debug_trajectory_details: True
       # --- velocity limits: see SPEEDS note at the top of this file ---
-      min_vel_x: -0.025       # slow reverse allowed; the X2 is 360 deg so the
-                              # costmap does see what is behind the robot
-      max_vel_x: 0.055
+      min_vel_x: -0.025       # slow reverse allowed; the lidar is 360 deg so
+                              # the costmap does see what is behind the robot.
+                              # (Read "the X2" until 21 Sep -- it is an X3 Pro;
+                              # the 11 Sep model correction missed this line.)
+      max_vel_x: 0.10
       min_vel_y: 0.0
       max_vel_y: 0.0          # differential drive: no sideways motion, ever
-      # TUNED DOWN from 1.0. This is a SLAM limit, not a comfort limit. The
-      # YDLidar sweeps at 10 Hz, so one scan takes 100 ms, and every ray in it
-      # is taken at a different robot heading. slam_toolbox does not deskew.
-      # At 1.0 rad/s the robot turned 5.7 deg during a single sweep, which
-      # smears a wall 4 m away by 40 cm -- and a 40 cm smear on an 0.05 m grid
-      # is exactly the "wall drawn twice, offset" artefact. At 0.5 it is 20 cm,
-      # at 0.3 about 12 cm. Lower this further before you lower max_vel_x;
-      # linear motion barely contributes to this error.
-      max_vel_theta: 0.125
-      min_speed_xy: -0.025
-      max_speed_xy: 0.055
+      # TUNED DOWN from upstream's 1.0. This is a SLAM limit, not a comfort
+      # limit: every ray in a sweep is taken at a different robot heading and
+      # slam_toolbox does not deskew, so yaw rate smears the scan.
+      #
+      # A sweep is 86 ms, NOT the 100 ms this comment used to assume -- the SDK
+      # measured 11.57 rev/s at 350 points on 11 Sep (see ydlidar.yaml), so
+      # every smear figure written here before today was ~16 % pessimistic.
+      # Smear on a wall 4 m away is 4 m * omega * 0.086 s:
+      #
+      #     1.000 rad/s -> 34 cm        0.500 -> 17 cm
+      #     0.250 rad/s -> 8.6 cm       0.125 -> 4.3 cm
+      #
+      # The artefact is a wall drawn twice, offset, and on an 0.05 m grid it
+      # starts to show once the smear is a cell or two.
+      #
+      # RAISED 21 Sep, 0.125 -> 0.25. Exploration is mostly turning, and at
+      # 0.125 rad/s a 180 deg turn takes 25 s. 8.6 cm is under two cells; it is
+      # also the first number to back off if the map starts doubling walls.
+      # Lower this before you lower max_vel_x -- linear motion barely
+      # contributes (0.10 m/s is 0.9 cm of shear over the same sweep).
+      max_vel_theta: 0.25
+      # NOT a reverse limit -- min_vel_x above is that. These three are the
+      # magnitude gate in XYThetaIterator::isValidSpeed, which rejects a sample
+      # only if hypot(x,y) is below min_speed_xy AND |theta| is below
+      # min_speed_theta, and skips the test entirely if either is negative.
+      # -0.025 read as "allow reverse" and did nothing at all. 0.0 is
+      # upstream's value, has exactly the same effect, and does not imply
+      # otherwise. Corrected 21 Sep.
+      min_speed_xy: 0.0
+      max_speed_xy: 0.10
       min_speed_theta: 0.0
-      # Accelerations scaled by the same 4x. Left at the old values the robot
-      # would reach its (now tiny) top speed in 0.1 s, which is a snap that
-      # breaks the wheels loose -- and slipped wheels are odom error that scan
-      # matching cannot predict.
-      acc_lim_x: 0.125
+      # Set to hold the RAMP TIME constant across the 21 Sep speed change, not
+      # to hold the acceleration constant: 0.10 / 0.225 = 0.44 s to top speed,
+      # which is what 0.055 / 0.125 gave, and 0.25 / 0.5 = 0.5 s to full yaw
+      # rate, which is what 0.125 / 0.25 gave. Anything sharper is a snap that
+      # breaks the wheels loose, and slipped wheels are encoder counts with no
+      # ground motion -- odom error no amount of scan matching can predict
+      # (D-23, scripts/slip_check.py).
+      #
+      # THESE DO NOT LIMIT WHAT DWB COMMANDS. With the default
+      # StandardTrajectoryGenerator the sampling window is what is reachable
+      # within sim_time, not within one control period, and sim_time * acc_lim
+      # = 0.675 m/s dwarfs the whole velocity range -- so every cycle samples
+      # the full [min_vel_x, max_vel_x] and DWB can, and does, command a step
+      # change. What these shape is the predicted rollout. The velocity_smoother
+      # at the bottom of this file is what ramps the wire, so keep the two in
+      # step or the trajectory DWB scores is not the one the robot drives.
+      acc_lim_x: 0.225
       acc_lim_y: 0.0
-      # TUNED DOWN from 2.0. A hard yaw snap breaks the wheels loose, and
-      # slipped wheels are encoder counts with no ground motion -- odom yaw
-      # error that no amount of scan matching can predict.
-      acc_lim_theta: 0.25
-      decel_lim_x: -0.125
+      acc_lim_theta: 0.5
+      decel_lim_x: -0.225
       decel_lim_y: 0.0
-      decel_lim_theta: -0.25
+      decel_lim_theta: -0.5
+      # Sample counts, against what the wheels can actually resolve.
+      # diffdrive_serial.cpp rounds EACH WHEEL INDEPENDENTLY to whole encoder
+      # ticks per 30 Hz PID frame, and one tick on one wheel is 2.49 mm/s of
+      # wheel speed -- 0.0025 m/s of vx, or 0.0099 rad/s of yaw. Across the
+      # ranges set above that is 50 distinct vx commands and 50 distinct yaw
+      # commands; sampling finer than that only scores duplicates. 20 and 40
+      # both still sit under their ceiling -- checked 21 Sep, when doubling the
+      # yaw range could have pushed 40 the wrong side of it, and did not.
       vx_samples: 20
       vy_samples: 1           # must be >=1 even though max_vel_y is 0
       vtheta_samples: 40
-      # RAISED from 1.5 with the speed cut. DWB rolls trajectories forward for
-      # this long, so the lookahead DISTANCE is sim_time * max_vel_x. At 1.5 s
-      # and 0.055 m/s that is 8 cm -- less than the robot's own length, and the
-      # planner goes blind to anything further ahead than its own front bumper.
-      # 5.0 s restores roughly the 30 cm horizon it had at the old speed.
-      sim_time: 5.0
+      # DWB rolls trajectories forward for this long, so the lookahead DISTANCE
+      # is sim_time * max_vel_x, and ~30 cm -- about the robot's own length --
+      # is the horizon this file has always aimed for. It was 1.5 s at upstream
+      # 0.22 m/s, 5.0 s at 0.055, and is 3.0 s at 0.10 (21 Sep). Below about
+      # 0.30 m the planner goes blind to anything past its own front bumper.
+      #
+      # Do not leave it high "for safety": each extra second is more poses per
+      # trajectory to rasterise, and with ObstacleFootprint in the critics that
+      # cost is now paid on the robot's whole outline instead of one cell.
+      sim_time: 3.0
       linear_granularity: 0.05
       angular_granularity: 0.025
       transform_tolerance: 0.2
       xy_goal_tolerance: 0.15
-      # SCALED. This is the "is it stopped yet" threshold for rotating in
-      # place at the goal. At 0.25 it sat 4x ABOVE the new top speed, so the
-      # robot counted as stopped while still driving at full tilt.
-      trans_stopped_velocity: 0.0625
+      # The "is it stopped yet" threshold for rotating in place at the goal,
+      # and it does nothing useful unless it sits BELOW max_vel_x. Inside
+      # xy_goal_tolerance RotateToGoal has two phases: above this threshold it
+      # admits only trajectories slower than the current speed, which is the
+      # braking phase; below it, it rejects any trajectory with linear motion
+      # at all and the robot turns on the spot.
+      #
+      # 0.0625 was still ABOVE max_vel_x 0.055 -- the very defect the comment
+      # here claimed to have fixed, inherited from 0.25 and merely made
+      # smaller. The braking phase could never run: the robot crossed into the
+      # window at full speed, DWB commanded zero in one cycle, and the
+      # velocity_smoother absorbed the step. Fixed 21 Sep. 0.01 is 10 % of top
+      # speed, roughly one control cycle of braking from a stop.
+      trans_stopped_velocity: 0.01
       short_circuit_trajectory_evaluation: True
       stateful: True
+      # ObstacleFootprint is OURS (21 Sep); the rest is upstream's list in
+      # upstream's order.
+      #
+      # BaseObstacle scores the cost of the single cell under base_link, which
+      # is a CIRCULAR-robot test. Upstream gets away with it because its
+      # inflation_radius 0.55 exceeds its robot_radius 0.22, so the inflation is
+      # the footprint. Here the inscribed radius is 0.09 -- the FRONT edge, see
+      # FOOTPRINT at the top of this file -- while the robot is 0.147 half-wide
+      # and reaches 0.265 behind base_link. Cells were only ever marked
+      # INSCRIBED within 0.09 m of an obstacle, so a trajectory that put a rear
+      # corner 17 cm inside a wall scored clean, and nothing downstream
+      # re-checks it: navfn plans on cost, not on the polygon.
+      #
+      # BOTH are kept. ObstacleFootprint rasterises the footprint BORDER only
+      # (its own header says so, and says that is valid "if the obstacles in
+      # the local costmap are inflated" -- the other half of why
+      # inflation_radius moved to 0.32), so the cheap centre-cell test still
+      # covers anything strictly inside the polygon.
+      #
+      # LAST in the list on purpose: it is the expensive critic, and with
+      # short_circuit_trajectory_evaluation above, a trajectory the path
+      # critics have already ruled out never reaches it.
       critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign",
-                "PathAlign", "PathDist", "GoalDist"]
+                "PathAlign", "PathDist", "GoalDist", "ObstacleFootprint"]
       BaseObstacle.scale: 0.02
+      # 0.4, NOT 0.02, to weigh the same as the BaseObstacle line above:
+      # ObstacleFootprintCritic overrides getScale() to return
+      # costmap_resolution * scale (0.05 * 0.4 = 0.02); BaseObstacleCritic does
+      # not override it at all. Copying 0.02 across would have been a 20x cut.
+      # Neither scale affects collision REJECTION, which is an exception thrown
+      # out of scorePose and cannot be weighted away.
+      ObstacleFootprint.scale: 0.4
       PathAlign.scale: 32.0
       PathAlign.forward_point_distance: 0.1
       GoalAlign.scale: 24.0
@@ -291,10 +402,23 @@ local_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        # TUNED: upstream 0.55, which on a 0.29 m robot would inflate a typical
-        # 0.8 m doorway shut and make it unplannable. 0.25 clears the 0.147 m
-        # half-width with margin.
-        inflation_radius: 0.25
+        # TUNED: upstream 0.55, which on a 0.29 m robot leaves almost no clear
+        # lane through a typical 0.8 m doorway.
+        #
+        # RAISED 21 Sep, 0.25 -> 0.32, to just clear the CIRCUMSCRIBED radius
+        # hypot(0.265, 0.147) = 0.303 (the r=0.30 circle the FOOTPRINT note at
+        # the top refuses to navigate with, which is still the right figure for
+        # deciding how far to inflate). Below that the inflated band did not
+        # reach the corners of the robot it exists to protect, and
+        # ObstacleFootprint's border test assumes it does -- see the critics
+        # list in FollowPath. 0.25 was picked against the 0.147 half-width
+        # alone and forgot that base_link is not the centre of this robot.
+        #
+        # This does NOT narrow a doorway. Only cells inside the inscribed
+        # radius read as lethal to the planner, and that band comes from the
+        # footprint (0.09, plus nav2's default footprint_padding of 0.01), not
+        # from this number. A 0.8 m doorway keeps a 0.6 m plannable lane.
+        inflation_radius: 0.32
       always_send_full_costmap: True
 
 global_costmap:
@@ -344,7 +468,11 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        inflation_radius: 0.25
+        # Same 0.32 as the local costmap, and for the same reason -- see the
+        # note there. Raised 21 Sep. Keep the two equal: a global plan drawn
+        # against a different inflation than the one the controller scores
+        # against is a plan DWB will fight.
+        inflation_radius: 0.32
       always_send_full_costmap: True
 
 planner_server:
@@ -398,9 +526,20 @@ behavior_server:
     # it looks: recoveries fire exactly when the map is already confused, and a
     # fast recovery spin is the single worst thing for scan matching. See the
     # deskew note on max_vel_theta above.
-    max_rotational_vel: 0.1
+    #
+    # RAISED 21 Sep, 0.1 -> 0.2, holding that 0.8 ratio to DWB's new 0.25. A
+    # 1.57 rad spin now takes 7.9 s instead of 15.7. The BT still passes
+    # time_allowance="25.0" (see bt_navigator at the top); that was sized for
+    # the slow spin, so it is now slack rather than a close fit, which is the
+    # safe direction. Do NOT re-tighten it towards the port default of 10.0 --
+    # that is what failed four spins out of four on 15 Sep.
+    max_rotational_vel: 0.2
     min_rotational_vel: 0.05
-    rotational_acc_lim: 0.25
+    # Same 0.4 s ramp as before (0.2 / 0.5), matched to FollowPath's
+    # acc_lim_theta so a recovery spin and a planned turn break the wheels
+    # loose at the same rate. Recoveries bypass the velocity_smoother, so on
+    # this path it is the only acceleration limit there is.
+    rotational_acc_lim: 0.5
 
 waypoint_follower:
   ros__parameters:
@@ -420,11 +559,17 @@ velocity_smoother:
     scale_velocities: False
     feedback: "OPEN_LOOP"
     # Must not exceed DWB's limits above, or the smoother would hand the ESP32
-    # a faster command than the planner ever asked for.
-    max_velocity: [0.055, 0.0, 0.125]
-    min_velocity: [-0.025, 0.0, -0.125]
-    max_accel: [0.125, 0.0, 0.25]
-    max_decel: [-0.125, 0.0, -0.25]
+    # a faster command than the planner ever asked for. Raised 21 Sep with
+    # them.
+    #
+    # These four lines are what actually ramps the robot: DWB samples the full
+    # velocity range every cycle and its acc_lim_* only shape the trajectory it
+    # PREDICTS (see the note there), so a step command out of the controller is
+    # normal and this is what turns it into a ramp.
+    max_velocity: [0.10, 0.0, 0.25]
+    min_velocity: [-0.025, 0.0, -0.25]
+    max_accel: [0.225, 0.0, 0.5]
+    max_decel: [-0.225, 0.0, -0.5]
     odom_topic: "/diff_cont/odom"
     odom_duration: 0.1
     deadband_velocity: [0.0, 0.0, 0.0]
