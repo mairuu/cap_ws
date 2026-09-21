@@ -84,6 +84,10 @@ install(PROGRAMS
   # Listens only, but must be run WHILE DRIVING: it is a time series, not a
   # snapshot, and rubber-banding is invisible in a snapshot.
   scripts/check_pose_stability.py
+  # D-23/D-25: phantom yaw from wheel slip, and whether the heading estimate
+  # rejected it. Listen-only, but must be run WHILE DRIVING INTO AN OBSTACLE.
+  # Run once each way (with and without USE_EKF=true); the pair is the result.
+  scripts/slip_check.py
   # Day-3 lidar checks. Listen only; need the lidar driver but no TF.
   scripts/scan_dropout_report.py
   scripts/check_scan_bearing.py
