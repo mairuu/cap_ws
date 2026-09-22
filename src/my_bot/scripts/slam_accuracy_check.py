@@ -188,6 +188,36 @@ def do_mark(args):
     return 0
 
 
+def fit_alignment(pairs):
+    """Best rotation (and separately, scale) taking truth onto reported.
+
+    2D Procrustes, anchored at the map origin because HOME *is* the origin --
+    there is no translation to solve for, only the angle between the axes you
+    taped against and the axes slam_toolbox actually used.
+
+    WHY THIS IS NOT CHEATING. Aiming the robot at a wall by eye is worth a few
+    degrees, and a few degrees is metres at the far end of a room: 4 deg at
+    4.2 m is 30 cm, which fails a 10 cm criterion on its own with a perfect
+    mapper. Standard SLAM benchmarking (ATE) removes a rigid alignment for
+    exactly this reason -- the reference frame's orientation is arbitrary, and
+    what is being measured is the SHAPE of the estimate, not which way the
+    tape happened to point. Report both: raw error is what the operator got,
+    aligned error is what the mapper did.
+
+    Returns (theta_rad, scale, residuals) with residuals in the input order.
+    """
+    num = sum(t[0] * r[1] - t[1] * r[0] for t, r in pairs)
+    den = sum(t[0] * r[0] + t[1] * r[1] for t, r in pairs)
+    th = math.atan2(num, den)
+    c, s = math.cos(th), math.sin(th)
+    rot = [(c * t[0] - s * t[1], s * t[0] + c * t[1]) for t, _ in pairs]
+    tt = sum(t[0] * t[0] + t[1] * t[1] for t, _ in pairs)
+    scale = (sum(p[0] * r[0] + p[1] * r[1] for p, (_, r) in zip(rot, pairs)) / tt
+             if tt > 0 else 1.0)
+    resid = [math.hypot(p[0] - r[0], p[1] - r[1]) for p, (_, r) in zip(rot, pairs)]
+    return th, scale, resid
+
+
 def do_summary(args):
     path = os.path.expanduser(args.session)
     if not os.path.exists(path):
@@ -248,11 +278,52 @@ def do_summary(args):
               "(wheel radius / ticks per rev),")
         print("  not a mapping error. Mixed signs are matcher noise.")
 
+    pairs = [((v[0]["truth_x"], v[0]["truth_y"]),
+              (statistics.fmean([x["x"] for x in v]),
+               statistics.fmean([x["y"] for x in v])))
+             for v in marks.values() if "truth_x" in v[0]]
+    aligned_worst = None
+    if len(pairs) >= 3:
+        th, sc, resid = fit_alignment(pairs)
+        aligned_worst = max(resid)
+        names_t = [n for n, v in marks.items() if "truth_x" in v[0]]
+        print(f"\n=== frame alignment ===")
+        print(f"best-fit rotation between your tape axes and the map's: "
+              f"{math.degrees(th):+.2f} deg")
+        print("residual after removing it, per mark (cm):  "
+              + "  ".join(f"{n}={e*100:.1f}" for n, e in zip(names_t, resid)))
+        print(f"worst {aligned_worst*100:.1f} cm")
+        if abs(math.degrees(th)) > 1.0:
+            far = max(math.hypot(*t) for t, _ in pairs)
+            print(f"  ! {abs(math.degrees(th)):.1f} deg is worth "
+                  f"{abs(math.sin(th)) * far * 100:.0f} cm at your furthest mark "
+                  f"({far:.1f} m).")
+            print("    A rotation that does NOT grow with distance driven is a "
+                  "SETUP error -- the robot's")
+            print("    heading at `make slam` was not parallel to the wall you "
+                  "taped against. It is not")
+            print("    SLAM drift, and re-aiming the robot fixes it. See the "
+                  "docstring on why removing")
+            print("    it is standard practice (ATE), not cheating.")
+        if abs(sc - 1.0) > 0.005:
+            print(f"  ! residual scale {100*(sc-1):+.2f} % "
+                  f"(reported distances {'short' if sc < 1 else 'long'} of tape).")
+            print("    Fit on few points, so treat it as a HYPOTHESIS, not a "
+                  "calibration. The standing")
+            print("    instruction in records/calibration.md is to re-derive "
+                  "wheel_radius over a long")
+            print("    TAPED run if map scale ever looks wrong -- not to apply "
+                  "a correction from this.")
+
     print()
     if any_truth:
         v = "PASS" if worst_err <= args.error_max else "FAIL"
         print(f"ABSOLUTE   worst {worst_err*100:.1f} cm  -> {v} against "
               f"{args.error_max*100:.0f} cm")
+        if aligned_worst is not None:
+            va = "PASS" if aligned_worst <= args.error_max else "FAIL"
+            print(f"ALIGNED    worst {aligned_worst*100:.1f} cm  -> {va}  "
+                  "(frame rotation removed)")
     else:
         print("ABSOLUTE   not measured -- no visit carried --truth")
     if worst_rep > 0:
