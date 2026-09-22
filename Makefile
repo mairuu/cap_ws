@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 ROS_DISTRO ?= humble
 
-.PHONY: build sim real slam nav explore rviz save-map bag bag-play yolo yolo-onnx camera calib calib-report calib-scale semantic test bridge bridge-venv ui ui-deps teleop teleop-nav udev ports net net-check viewer-sync lidar-deps explore-deps clean
+.PHONY: build sim real slam nav explore rviz save-map bag bag-play yolo yolo-onnx camera calib calib-report calib-scale semantic test bridge bridge-venv ui ui-deps teleop teleop-nav teleop-joy teleop-joy-nav joy-check udev ports net net-check viewer-sync lidar-deps explore-deps clean
 
 build:
 	source /opt/ros/$(ROS_DISTRO)/setup.bash && colcon build --symlink-install
@@ -422,6 +422,98 @@ teleop-nav:
 	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
 	ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r /cmd_vel:=/cmd_vel_teleop_raw \
 	  -p speed:=$(SPEED) -p turn:=$(TURN)
+
+# ---------------------------------------------------------------------------
+# Gamepad teleop -- the same two entry points as the keyboard, same rules.
+#
+#   make teleop-joy        standalone, NO nav stack   (mirrors `make teleop`)
+#   make teleop-joy-nav    during make nav/explore    (mirrors `make teleop-nav`)
+#
+# Both run src/my_bot/launch/joystick.launch.py, which is where the full
+# reasoning lives. What matters here:
+#
+# HOLD THE DEADMAN (LT on the xbox layout) OR NOTHING MOVES. That is not a
+# misconfiguration, it is require_enable_button -- a pad left on a bench cannot
+# drive the robot on its own.
+#
+# THE TWO SPEEDS ARE ON THE TWO BUTTONS, not on a keypress that nobody sees:
+#   stick only        -> up to JOY_SPEED, 0.10 m/s, the MAPPING speed
+#   stick + RT turbo  -> up to JOY_TURBO, 0.30 m/s, the ceiling
+# Never press turbo during a run that is building a map. At 0.30 the X3 Pro
+# shears each scan by 2.6 cm against 0.9 cm at 0.10, and optimisation cannot
+# un-shear a scan once it is in the pose graph (D-26, and the 10 Sep map).
+#
+# RELEASING THE DEADMAN IS NOT A STOP DURING AN AUTONOMOUS RUN. It sends one
+# zero Twist and then goes quiet, so twist_mux's 0.5 s teleop timeout expires
+# and Nav2 takes the robot back -- the joystick is a momentary override, exactly
+# like the keyboard. To END an autonomous run, Ctrl-C `make explore` / `make nav`.
+# Standalone (`make teleop-joy`) silence really does stop the robot: nothing
+# else publishes there, so diff_cont's cmd_vel_timeout halts the wheels.
+#
+# teleop-joy-nav publishes to /cmd_vel_teleop_raw, so teleop_speed_guard clamps
+# it exactly as it clamps the keyboard -- `make nav TELEOP_MAX_LINEAR=0.10`
+# still binds, and still outranks anything set here. teleop-joy publishes
+# straight to diff_cont with NO guard in front of it; diff_cont's own 0.30
+# clamp is the only limit there.
+#
+# JOY_CONFIG picks the pad's button/axis NUMBERS (xbox, ps3, ps5, atk3, xd3) --
+# the speeds below override that file's scales, which ask for 0.7/1.5 m/s and
+# are meaningless on this robot. For a pad that is not in the list, start this
+# target and run `ros2 topic echo /joy` to read the real indices.
+#
+# If the pad is missing, `joy-check` stops both targets with a diagnosis rather
+# than letting them come up looking alive and ignoring every input.
+#   make teleop-joy-nav JOY_CONFIG=ps3
+#   make teleop-joy-nav JOY_SPEED=0.20        # faster, still under the guard
+#   make teleop-joy JOY_DEV=1                 # second pad, SDL index not /dev
+JOY_CONFIG ?= xbox
+JOY_DEV    ?= 0
+JOY_SPEED  ?= 0.10
+JOY_TURBO  ?= 0.30
+JOY_TURN   ?= 0.50
+
+# What SDL2 can actually see. Humble's joy_node enumerates through SDL, NOT by
+# opening /dev/input/jsN, so a present /dev/input/js0 is neither necessary nor
+# sufficient and `ls /dev/input` answers the wrong question. This runs the same
+# enumeration joy_node will.
+#
+# An empty list is almost always one of: the pad is not plugged in; it is a
+# receiver that needs the dongle paired; or the udev ACL never landed, which
+# happens when no seat session owns the device (70-uaccess.rules tags
+# ID_INPUT_JOYSTICK for the active seat -- over SSH with nobody logged in
+# locally, there is no such session). `sudo usermod -aG input $(USER)` plus a
+# re-login is the blunt fix for that last one.
+joy-check:
+	@source /opt/ros/$(ROS_DISTRO)/setup.bash && \
+	out=$$(ros2 run joy joy_enumerate_devices 2>/dev/null); \
+	n=$$(echo "$$out" | tail -n +3 | grep -c .); \
+	if [ "$$n" -eq 0 ]; then \
+	  echo "NO JOYSTICK: SDL2 enumerated 0 devices."; \
+	  echo "  - is the pad plugged in (or its dongle)?"; \
+	  echo "  - permissions: $$(ls -l /dev/input/event* 2>/dev/null | head -1)"; \
+	  echo "    you are in: $$(id -nG)"; \
+	  echo "    if 'input' is missing: sudo usermod -aG input $(USER), then log out and back in"; \
+	  exit 1; \
+	fi; \
+	echo "$$out"
+
+teleop-joy: build joy-check
+	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
+	source install/setup.bash && \
+	ros2 launch my_bot joystick.launch.py \
+	  cmd_vel_topic:=/diff_cont/cmd_vel_unstamped \
+	  joy_config:=$(JOY_CONFIG) joy_dev:=$(JOY_DEV) \
+	  scale_linear:=$(JOY_SPEED) scale_linear_turbo:=$(JOY_TURBO) \
+	  scale_angular:=$(JOY_TURN)
+
+teleop-joy-nav: build joy-check
+	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
+	source install/setup.bash && \
+	ros2 launch my_bot joystick.launch.py \
+	  cmd_vel_topic:=/cmd_vel_teleop_raw \
+	  joy_config:=$(JOY_CONFIG) joy_dev:=$(JOY_DEV) \
+	  scale_linear:=$(JOY_SPEED) scale_linear_turbo:=$(JOY_TURBO) \
+	  scale_angular:=$(JOY_TURN) use_sim_time:=$(SIM_TIME)
 
 # One-time per machine: configure multi-machine ROS 2 over the phone hotspot.
 # Run it on the Jetson AND on any laptop that runs RViz or teleop.
