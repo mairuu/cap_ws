@@ -107,6 +107,12 @@ install(PROGRAMS
   # Day-6/7 fusion check: scores /semantic_landmarks for one class against a
   # tape-measured truth (error, spread, duplicates). Listen only.
   scripts/landmark_tape_measure.py
+  # Objective 1 and 4 of the report's evaluation table: SLAM pose error against
+  # tape-measured marks, and CPU/GPU/RAM/thermals through a run. Neither drives
+  # the robot; slam_accuracy_check.py needs `make slam` for the map frame,
+  # resource_report.py needs no ROS graph at all (it shells out to tegrastats).
+  scripts/slam_accuracy_check.py
+  scripts/resource_report.py
   # Day-7 stretch: "go to the nearest chair". Needs make nav (NavigateToPose)
   # and make semantic (/semantic_landmarks) as well as the rest of the stack.
   scripts/go_to_object.py
