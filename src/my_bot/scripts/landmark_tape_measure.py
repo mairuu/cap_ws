@@ -300,7 +300,11 @@ def main():
         record_pass(args, dict(pass_label=args.pass_label, x=best["x"], y=best["y"],
                                truth_x=tx, truth_y=ty, error=err,
                                within_run_spread=spread, duplicates=len(near),
-                               seen_count=best["seen_count"], id=best["id"]))
+                               seen_count=best["seen_count"], id=best["id"],
+                               # every publish near the truth, for the report's
+                               # scatter figure (plot_objectives.py object)
+                               samples=[[round(x, 4), round(y, 4)]
+                                        for x, y in xs_ys[-400:]]))
     rclpy.shutdown()
     sys.exit(0 if (ok_err and ok_spread and ok_dup) else 1)
 

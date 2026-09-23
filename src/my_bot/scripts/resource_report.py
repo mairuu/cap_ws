@@ -38,6 +38,9 @@ WHAT ELSE IS PRINTED, and why each is in the report.
   power   VDD_IN, which is board input power. Useful for a battery-life
           sentence and for nothing else.
 
+Every sample is also written to a CSV under --samples-dir, and the session
+row records its path; `plot_objectives.py resource` draws the figure from it.
+
 Each run appends to --session (default ~/maps/resource_session.jsonl) so that
 several windows -- idle, mapping only, mapping plus detection -- can be quoted
 side by side. That comparison is worth more than any single number: it shows
@@ -45,6 +48,7 @@ what the detector actually costs.
 """
 
 import argparse
+import csv
 import json
 import os
 import re
@@ -87,7 +91,8 @@ def collect(seconds, interval_ms, quiet):
         ["tegrastats", "--interval", str(interval_ms)],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     samples = []
-    deadline = time.monotonic() + seconds
+    t0 = time.monotonic()
+    deadline = t0 + seconds
     try:
         while time.monotonic() < deadline:
             line = proc.stdout.readline()
@@ -96,6 +101,7 @@ def collect(seconds, interval_ms, quiet):
             s = parse(line)
             if s is None:
                 continue
+            s["t"] = time.monotonic() - t0
             samples.append(s)
             if not quiet and len(samples) % 10 == 0:
                 left = deadline - time.monotonic()
@@ -183,11 +189,37 @@ def report(samples, args):
         "tj_max": max(tjs) if tjs else None,
         "watt_mean": statistics.fmean(mws) / 1000.0 if mws else None,
     }
+    row["samples_csv"] = write_samples(samples, ncore, args)
     path = os.path.expanduser(args.session)
     with open(path, "a") as fh:
         fh.write(json.dumps(row) + "\n")
     print(f"\nappended to {path}")
+    print(f"every sample in  {row['samples_csv']}  (plot_objectives.py reads it)")
     return 0
+
+
+def write_samples(samples, ncore, args):
+    """Every tegrastats line as one CSV row, so the report can plot the window.
+
+    The session row above is the table's number; this is the figure's. The
+    criterion says "throughout the working period", and only a time series
+    shows that -- a mean can hide a ten-minute stretch pinned at 100 %.
+    """
+    d = os.path.expanduser(args.samples_dir)
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, time.strftime("%Y%m%d-%H%M%S") + ".csv")
+    cols = (["t_s", "cpu_mean"] + [f"core{i}" for i in range(ncore)]
+            + ["gpu", "ram_mb", "ram_total_mb", "tj_c", "vdd_in_mw"])
+    with open(path, "w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(cols)
+        for s in samples:
+            cores = (s["cores"] + [""] * ncore)[:ncore]
+            w.writerow([f"{s['t']:.2f}", f"{statistics.fmean(s['cores']):.2f}"]
+                       + cores + [s.get("gpu", ""), s.get("ram_mb", ""),
+                                  s.get("ram_total_mb", ""), s.get("tj", ""),
+                                  s.get("mw", "")])
+    return path
 
 
 def do_summary(args):
@@ -220,6 +252,8 @@ def main():
                     help="what was running, e.g. 'slam+yolo, driving'")
     ap.add_argument("--quiet", action="store_true")
     ap.add_argument("--session", default="~/maps/resource_session.jsonl")
+    ap.add_argument("--samples-dir", default="~/maps/resource_samples",
+                    help="one CSV of every sample per window goes here")
     ap.add_argument("--summary", action="store_true",
                     help="print every window recorded so far and stop")
     args = ap.parse_args()
