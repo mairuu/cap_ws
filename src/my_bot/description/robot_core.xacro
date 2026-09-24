@@ -15,7 +15,7 @@
          actually scales odometry; diff_drive_controller reads the YAML, not
          this URDF. Change one and you must change the other, or the URDF's
          ground plane and lidar height drift away from the real robot. -->
-    <xacro:property name="wheel_radius" value="0.03203"/>
+    <xacro:property name="wheel_radius" value="0.0327"/>
     <xacro:property name="wheel_thickness" value="0.028"/>
     <xacro:property name="wheel_mass" value="0.05"/>
     <!-- MEASURED: axle to chassis REAR edge. chassis_length above is still an
