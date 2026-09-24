@@ -394,10 +394,48 @@ def plot_resource(args, L):
     return 0
 
 
+# ---------------------------------------------------------------- objective 3
+# The three measured detection rates, each from records/calibration.md. They
+# are not re-derived here: two came from live `detection_report.py` runs and
+# one from a bag's metadata, and none of those sources is a file this script
+# can re-read. Conditions differ between rows, and the labels say how.
+FPS_RUNS = [
+    # (th label, en label, Hz, colour)
+    ("YOLO26s ONNX\nทำงานลำพัง\n(16 ก.ย.)", "YOLO26s ONNX\nstandalone\n(16 Sep)", 15.13, BLUE),
+    ("YOLO26s ONNX\nเปิดทั้งระบบ + บันทึก bag\n(22 ก.ย.)", "YOLO26s ONNX\nfull stack + recorder\n(22 Sep)", 13.05, BLUE),
+    ("YOLO26l TensorRT\nพร้อม SLAM + ผสานข้อมูล\n(24 ก.ย.)", "YOLO26l TensorRT\nwith SLAM + fusion\n(24 Sep)", 15.16, AQUA),
+]
+
+
+def plot_fps(args, L):
+    th = args.lang == "th"
+    fig, ax = plt.subplots(figsize=(7.2, 3.6))
+    xs = range(len(FPS_RUNS))
+    for x, (lt, le, hz, c) in zip(xs, FPS_RUNS):
+        ax.bar(x, hz, width=0.5, color=c, zorder=2)
+        ax.annotate("%.2f" % hz, xy=(x, hz), xytext=(0, 3), textcoords="offset points",
+                    ha="center", va="bottom", color=INK, fontsize=10)
+    ax.set_xticks(list(xs))
+    ax.set_xticklabels([r[0] if th else r[1] for r in FPS_RUNS], fontsize=9)
+    # Both reference lines are labelled in a margin to the right of the last
+    # bar, so neither label can sit on a bar or on a value.
+    ax.set_xlim(-0.5, len(FPS_RUNS) - 0.5 + 0.75)
+    ax.axhline(15.0, color=INK2, lw=0.8, ls=":", zorder=1)
+    ax.annotate("กล้อง 15" if th else "camera 15", xy=(1.0, 15.0),
+                xycoords=("axes fraction", "data"), xytext=(-2, 3),
+                textcoords="offset points", ha="right", va="bottom", color=INK2, fontsize=9)
+    limit_line(ax, args.fps_min, ("เกณฑ์ %g" if th else "criterion %g") % args.fps_min)
+    ax.set_ylim(0, 17.5)
+    ax.set_ylabel("เฟรมต่อวินาที" if th else "frames per second")
+    ax.grid(axis="x", visible=False)
+    save(fig, args.out, "detection_fps.png")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("which", choices=["slam", "object", "resource", "all"])
+    ap.add_argument("which", choices=["slam", "object", "resource", "fps", "all"])
     ap.add_argument("--out", default="~/cap_ref/figures")
     ap.add_argument("--lang", choices=["th", "en"], default="th")
     ap.add_argument("--slam-session", default="~/maps/slam_accuracy.jsonl")
@@ -410,11 +448,13 @@ def main():
     ap.add_argument("--slam-max", type=float, default=0.10)
     ap.add_argument("--object-max", type=float, default=0.50)
     ap.add_argument("--cpu-max", type=float, default=80.0)
+    ap.add_argument("--fps-min", type=float, default=5.0)
     args = ap.parse_args()
 
     L = T[style(args.lang)]
     todo = ["slam", "object", "resource"] if args.which == "all" else [args.which]
-    fn = {"slam": plot_slam, "object": plot_object, "resource": plot_resource}
+    fn = {"slam": plot_slam, "object": plot_object, "resource": plot_resource,
+          "fps": plot_fps}
     rc = [fn[w](args, L) for w in todo]
     return 1 if any(rc) else 0
 
