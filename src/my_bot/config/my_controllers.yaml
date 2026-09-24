@@ -72,7 +72,11 @@ diff_cont:
     # larger than the correction it suggests, so applying it would be recording
     # noise as a calibration. Re-derive over a longer taped run if the map scale
     # ever looks wrong.
-    wheel_radius: 0.0327
+    # RE-DERIVED 2026-09-25: the map scale did look wrong (objective 1, every
+    # tape pair short, -2.3 %). calibrate_straight.py --distance 5.0, closed
+    # loop: odom 5.0018 m, tape 4.90 m -> 0.0327 * 4.90 / 5.0018 = 0.03203.
+    # Agrees with the 9 Sep hand push (-2.0 %). Mirror in robot_core.xacro.
+    wheel_radius: 0.03203
 
     # PER-SIDE RADIUS CORRECTION -- measured 2026-09-09, calibrate_straight.py
     # 3 m closed loop then calibrate_correct.py --floor-lateral.

@@ -279,7 +279,10 @@ class StraightRun(Node):
         print()
         print('NOW MEASURE THE FLOOR:')
         print('  1. distance between the marks ->')
-        print('       corrected wheel_radius = 0.034 * (tape_m / %.4f)' % dist)
+        # The base is the radius diff_drive_controller is USING, not the free
+        # tyre radius: this line said 0.034 until 25 Sep.
+        print('       corrected wheel_radius = <wheel_radius in '
+              'config/my_controllers.yaml> * (tape_m / %.4f)' % dist)
         print('       goes in config/my_controllers.yaml AND '
               'description/robot_core.xacro')
         if self.closed_loop:
