@@ -160,6 +160,13 @@ class YoloDetector(Node):
         fmt = {".engine": "TensorRT engine", ".onnx": "ONNX (onnxruntime)"}.get(ext, "torch")
         if ext in (".engine", ".onnx"):
             self._quantize = None
+        # The input resolution is baked in too. Do NOT pass imgsz for them:
+        # ultralytics then takes the shape from the model's own metadata. For
+        # a .onnx it does that even when given imgsz, but a TensorRT engine
+        # asserts instead -- a 480x640 engine (the camera's shape, which
+        # scores ~2 F1 points better than a padded 640x640, 24 Sep) dies on
+        # `imgsz=640` with "input size ... not equal to max model size".
+        self._size_kw = {} if ext in (".engine", ".onnx") else {"imgsz": self._imgsz}
 
         if self._device.startswith("cuda") and not torch.cuda.is_available():
             self.get_logger().fatal(
@@ -180,15 +187,16 @@ class YoloDetector(Node):
         # the depth-1 queue then turns into a burst of dropped frames.
         warm = np.zeros((480, 640, 3), dtype=np.uint8)
         t0 = time.perf_counter()
-        self._model.predict(warm, imgsz=self._imgsz, device=self._device,
-                            quantize=self._quantize, verbose=False)
+        self._model.predict(warm, device=self._device,
+                            quantize=self._quantize, verbose=False, **self._size_kw)
         warm_ms = (time.perf_counter() - t0) * 1000
 
         dev_name = (torch.cuda.get_device_name(0)
                     if self._device.startswith("cuda") else "cpu")
         self.get_logger().info(
             f"model {self._model_path} ({fmt}) "
-            f"on {dev_name}; imgsz {self._imgsz}, "
+            f"on {dev_name}; imgsz {list(self._model.predictor.imgsz)}"
+            f"{' (from the model)' if not self._size_kw else ''}, "
             # For a compiled format the node does not choose the precision --
             # it is in the graph. Printing "fp32/native" because quantize is
             # cleared would misreport an fp16 .onnx as fp32 (seen 16 Sep).
@@ -247,13 +255,13 @@ class YoloDetector(Node):
         results = self._model.track(
             frame,
             persist=True,
-            imgsz=self._imgsz,
             conf=self._conf,
             iou=self._iou,
             device=self._device,
             quantize=self._quantize,
             tracker=self._tracker,
             verbose=False,
+            **self._size_kw,
         )
         infer_ms = (time.perf_counter() - t_cb) * 1000
 
