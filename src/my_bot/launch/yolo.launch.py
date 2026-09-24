@@ -76,7 +76,14 @@ def _setup(context):
     env = {"PYTHONPATH": _venv_pythonpath(venv),
            # ultralytics "AutoUpdate" pip-installs missing packages into
            # whatever python it finds. Never silently at demo time.
-           "YOLO_OFFLINE": "1"}
+           "YOLO_OFFLINE": "1",
+           # numpy's OpenBLAS starts one thread per core, and ByteTrack's
+           # per-frame matrix maths on a handful of boxes wakes them all; they
+           # then busy-wait between frames. 24 Sep: 5 threads x ~45 % whenever
+           # anything was detected, 371 % for the node, objective 5 failed at
+           # 81.5 %. One thread: 263 % -> 38 % at the same rate. Not
+           # onnxruntime -- its pool was ruled out by the same test.
+           "OPENBLAS_NUM_THREADS": "1"}
 
     cam_dev = LaunchConfiguration("camera_device").perform(context)
     focus = LaunchConfiguration("focus").perform(context)
