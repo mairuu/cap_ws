@@ -51,14 +51,14 @@ TYPICAL RUN
     # 3. the number for the report
     python3 detection_accuracy.py score --data ~/eval/insitu \\
         --pred ~/eval/insitu/pred_onnx.json --run-label onnx-fp16 \\
-        --classes person chair bench laptop --figure ~/eval/accuracy.png
+        --classes person chair backpack laptop --figure ~/eval/accuracy.png
 
     # 4. the same frames through the .pt, then the comparison figure
     ~/yolo/venv/bin/python detection_accuracy.py predict --data ~/eval/insitu \\
         --model ~/yolo/yolo26s.pt --out ~/eval/insitu/pred_pt.json
     python3 detection_accuracy.py score --data ~/eval/insitu \\
         --pred ~/eval/insitu/pred_pt.json --run-label pt-torch \\
-        --classes person chair bench laptop
+        --classes person chair backpack laptop
     python3 detection_accuracy.py compare --session ~/maps/accuracy_session.jsonl \\
         --figure ~/eval/accuracy_backends.png
 
