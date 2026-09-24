@@ -164,7 +164,8 @@ def cmd_extract(args):
         import cv2
         import numpy as np
         from rclpy.serialization import deserialize_message
-        from rosbag2_py import (ConverterOptions, SequentialReader,
+        from rosbag2_py import (ConverterOptions, Info,
+                                SequentialCompressionReader, SequentialReader,
                                 StorageFilter, StorageOptions)
         from sensor_msgs.msg import CompressedImage
         from vision_msgs.msg import Detection2DArray
@@ -176,7 +177,16 @@ def cmd_extract(args):
     os.makedirs(frames_dir, exist_ok=True)
     os.makedirs(os.path.join(out, "labels"), exist_ok=True)
 
-    reader = SequentialReader()
+    # `make bag` records with --compression-mode file --compression-format zstd,
+    # so the file on disk is *.db3.zstd and a plain SequentialReader hands it to
+    # sqlite3 as-is ("file is not a database"). Pick the compression reader only
+    # when the metadata says so -- the plain reader is the path already tested.
+    meta = Info().read_metadata(expand(args.bag), args.storage)
+    compressed = bool(meta.compression_format)
+    if compressed:
+        print("bag is %s-compressed (%s mode)"
+              % (meta.compression_format, meta.compression_mode))
+    reader = SequentialCompressionReader() if compressed else SequentialReader()
     reader.open(StorageOptions(uri=expand(args.bag), storage_id=args.storage),
                 ConverterOptions("", ""))
     reader.set_filter(StorageFilter(topics=[args.image_topic, args.det_topic]))
