@@ -199,23 +199,36 @@ def plot_slam(args, L):
     a.set_xlabel(L["x"]); a.set_ylabel(L["y"]); a.set_title(L["slam_a"], loc="left")
     a.legend(loc="best", fontsize=9)
 
-    # (b) error per mark: one dot per visit, a diamond for the aligned residual
-    for i, n in enumerate(names):
-        errs = [v["error_m"] * 100 for v in marks[n]]
-        jit = [(k - (len(errs) - 1) / 2) * 0.08 for k in range(len(errs))]
+    # (b) error per mark: one dot per visit, a diamond for the aligned residual.
+    # The visit that DEFINES the origin (HOME at `make slam`, 0 by construction)
+    # is not a measurement, so it gets no dot; a HOME return later still does.
+    def is_origin(v):
+        return v["x"] == 0 and v["y"] == 0 and v["error_m"] == 0
+    shown = [n for n in names if not all(is_origin(v) for v in marks[n])]
+    for i, n in enumerate(shown):
+        errs = [v["error_m"] * 100 for v in marks[n] if not is_origin(v)]
+        # raw left of the tick, aligned right of it: at a near-zero rotation the
+        # two coincide and the diamond would hide the dot
+        jit = [(k - (len(errs) - 1) / 2) * 0.08 - 0.1 for k in range(len(errs))]
         b.scatter([i + j for j in jit], errs, s=40, color=BLUE, ec="white",
                   lw=1.5, zorder=3, label=L["raw"] if i == 0 else None)
+        if len(errs) == 1:
+            b.annotate(f"{errs[0]:.1f}", (i + jit[0], errs[0]), xytext=(-8, 0),
+                       textcoords="offset points", ha="right", va="center",
+                       fontsize=9, color=INK)
     aligned = None
     pairs = [((marks[n][0]["truth_x"], marks[n][0]["truth_y"]),
               (statistics.fmean(v["x"] for v in marks[n]),
                statistics.fmean(v["y"] for v in marks[n]))) for n in names]
     if len(pairs) >= 3:
         th, aligned = fit_rotation(pairs)
-        b.scatter(range(len(names)), [e * 100 for e in aligned], marker="D",
+        b.scatter([i + 0.1 for i in range(len(shown))],
+                  [aligned[names.index(n)] * 100 for n in shown], marker="D",
                   s=40, color=ORANGE, ec="white", lw=1.5, zorder=4,
-                  label=f"{L['aligned']} ({math.degrees(th):+.1f}°)")
+                  label=f"{L['aligned']} ({math.degrees(th):+.2f}°)")
     limit_line(b, args.slam_max * 100, L["limit_slam"])
-    b.set_xticks(range(len(names)), names)
+    b.set_xticks(range(len(shown)), shown)
+    b.set_xlim(-0.6, len(shown) - 0.4)  # room for the value label left of the first dot
     b.set_xlabel(L["mark"]); b.set_ylabel(L["err_cm"])
     b.set_ylim(0, max(args.slam_max * 100 * 1.4,
                       max(r["error_m"] for r in rows) * 100 * 1.15))
@@ -230,7 +243,8 @@ def plot_slam(args, L):
     print(f"slam: {len(rows)} visits, {len(names)} marks, up to {laps} lap(s)")
     print(f"      worst raw error      {worst*100:.1f} cm  "
           f"({'PASS' if worst <= args.slam_max else 'FAIL'} vs {args.slam_max*100:.0f})")
-    print(f"      mean raw error       {statistics.fmean(r['error_m'] for r in rows)*100:.1f} cm")
+    measured = [r["error_m"] for r in rows if not is_origin(r)] or [0.0]
+    print(f"      mean raw error       {statistics.fmean(measured)*100:.1f} cm")
     if aligned:
         print(f"      worst aligned error  {max(aligned)*100:.1f} cm")
     if reps:
