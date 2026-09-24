@@ -223,6 +223,10 @@ bag-play:
 MODEL      ?= $(HOME)/yolo/yolo26s.onnx
 PT_MODEL   ?= $(MODEL:.onnx=.pt)
 IMGSZ      ?= 640
+# Detector publish threshold. The semantic layer gates again at its own
+# min_confidence (semantic_objects/config/robot_params.yaml, 0.5), so lowering
+# this changes what /detections carries, not what reaches the map.
+CONF       ?= 0.5
 DEVICE     ?= cuda:0
 USE_CAMERA ?= true
 ONNX_OPSET ?= 17
@@ -246,7 +250,7 @@ yolo-onnx:
 yolo: build yolo-onnx
 	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
 	source install/setup.bash && \
-	ros2 launch my_bot yolo.launch.py model:=$(MODEL) imgsz:=$(IMGSZ) \
+	ros2 launch my_bot yolo.launch.py model:=$(MODEL) imgsz:=$(IMGSZ) conf:=$(CONF) \
 	  device:=$(DEVICE) use_camera:=$(USE_CAMERA) focus:=$(FOCUS) \
 	  camera_device:=$(CAM_DEV) camera_fps:=$(CAM_FPS)
 
