@@ -174,6 +174,12 @@ def cmd_extract(args):
 
     out = expand(args.out)
     frames_dir = os.path.join(out, "frames")
+    # Frames are numbered from 000000 on every run, so re-extracting into a
+    # used directory leaves the old run's higher-numbered frames behind,
+    # silently mixed into the set.
+    if os.path.isdir(frames_dir) and any(f.endswith(".jpg") for f in os.listdir(frames_dir)):
+        die("%s already has frames -- extract into a new --out, or delete it first"
+            % frames_dir)
     os.makedirs(frames_dir, exist_ok=True)
     os.makedirs(os.path.join(out, "labels"), exist_ok=True)
 
@@ -208,16 +214,41 @@ def cmd_extract(args):
     dets.sort(key=lambda x: x[0])
     print("bag: %d images, %d detection messages" % (len(images), len(dets)))
 
+    det_stamps = [d[0] for d in dets]
+    slop_ns = int(args.slop * 1e9)
+    import bisect
+
+    def nearest_det(ts):
+        j = bisect.bisect_left(det_stamps, ts)
+        best, bestd = None, None
+        for k in (j - 1, j, j + 1):
+            if 0 <= k < len(det_stamps):
+                d = abs(det_stamps[k] - ts)
+                if bestd is None or d < bestd:
+                    best, bestd = k, d
+        return best, bestd
+
+    # The detector copies the image header, so a frame it processed has a
+    # detection message at EXACTLY its stamp -- even an empty one. A frame with
+    # none was dropped at the detector's input (it runs below camera rate), so
+    # scoring it as all-misses penalises a frame the model never saw, and a
+    # bigger --slop pins a neighbour's boxes onto a frame 66 ms away.
+    if args.matched_only:
+        before = len(images)
+        def processed(ts):
+            best, bestd = nearest_det(ts)
+            return best is not None and bestd <= slop_ns
+        images = [im for im in images if processed(im[0])]
+        print("--matched-only: %d of %d images were processed by the detector"
+              % (len(images), before))
+
     chosen = images[::args.every]
     if args.max and len(chosen) > args.max:
         chosen = chosen[:args.max]
     print("sampling every %d -> %d frames" % (args.every, len(chosen)))
 
-    det_stamps = [d[0] for d in dets]
-    slop_ns = int(args.slop * 1e9)
     preds, manifest, matched, out_of_set = {}, [], 0, defaultdict(int)
 
-    import bisect
     for i, (ts, msg) in enumerate(chosen):
         name = "%06d" % i
         buf = np.frombuffer(msg.data, dtype=np.uint8)
@@ -231,13 +262,7 @@ def cmd_extract(args):
 
         boxes = []
         if det_stamps:
-            j = bisect.bisect_left(det_stamps, ts)
-            best, bestd = None, None
-            for k in (j - 1, j, j + 1):
-                if 0 <= k < len(det_stamps):
-                    d = abs(det_stamps[k] - ts)
-                    if bestd is None or d < bestd:
-                        best, bestd = k, d
+            best, bestd = nearest_det(ts)
             if best is not None and bestd <= slop_ns:
                 matched += 1
                 for det in dets[best][1].detections:
@@ -669,6 +694,9 @@ def main():
     e.add_argument("--det-topic", default=DEFAULT_DET_TOPIC)
     e.add_argument("--slop", type=float, default=0.05,
                    help="seconds; how close a detection stamp must be to the frame")
+    e.add_argument("--matched-only", action="store_true",
+                   help="sample only frames the detector processed (a detection "
+                        "message within --slop), instead of scoring dropped frames as misses")
     e.add_argument("--storage", default="sqlite3")
     e.add_argument("--quality", type=int, default=95)
     e.set_defaults(func=cmd_extract)
