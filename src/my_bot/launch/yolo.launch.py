@@ -5,12 +5,12 @@
 # the yolo_ros stack is kept in recoverable/mount/my_bot/launch/yolo.launch.py
 # for reference; what survives from it here is the venv trick below.
 #
-# THE MODEL. An .onnx by default (yolo26s), run by onnxruntime-gpu's CUDA
-# execution provider, built from the .pt on this board by cap_ws/yolo/
-# export_onnx.py -- `make yolo` runs that export first and skips it when the
-# file is already current. Its input resolution is BAKED IN, so model and imgsz
-# must agree: pass both, or use `make yolo IMGSZ=...`, which re-exports. A .pt
-# still works (torch, the Day 5 path) and so does a .engine.
+# THE MODEL. Since 24 Sep (D-30) a TensorRT engine by default: yolo26l, fp16,
+# exported at the camera's 480x640 on this board by cap_ws/yolo/export_engine.py
+# -- `make yolo` builds it first if it is missing. A compiled model carries its
+# input size, and the node takes it from the model, so `imgsz` is ignored for
+# .engine/.onnx. The yolo26s .onnx (D-22, onnxruntime CUDA EP, built by
+# export_onnx.py) and a .pt (torch, the Day 5 path) both still work.
 #
 # THE VENV TRICK. torch/ultralytics live in a hand-built uv venv (default
 # ~/yolo/venv, rebuilt by cap_ws/yolo/setup_yolo_venv.sh). Its interpreter is
@@ -52,9 +52,9 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 HOME = os.path.expanduser("~")
 DEFAULT_VENV = os.path.join(HOME, "yolo", "venv")
-# The .onnx, not the .pt: `make yolo` exports it first (yolo/export_onnx.py).
-# Launching this file directly assumes that export has already happened.
-DEFAULT_MODEL = os.path.join(HOME, "yolo", "yolo26s.onnx")
+# The engine, not the .pt: `make yolo` builds it first (yolo/export_engine.py).
+# Launching this file directly assumes that build has already happened.
+DEFAULT_MODEL = os.path.join(HOME, "yolo", "yolo26l_480x640.engine")
 
 # Native mode of the C615 and the size the intrinsics were calibrated at.
 # cam2image DEFAULTS TO 320x240 -- these are not decoration.
@@ -148,13 +148,13 @@ def _setup(context):
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("model", default_value=DEFAULT_MODEL,
-                              description="Path to an .onnx (default), a .pt, or a .engine built on THIS board"),
+                              description="Path to a .engine built on THIS board (default), an .onnx, or a .pt"),
         DeclareLaunchArgument("device", default_value="cuda:0",
                               description="cuda:0, or cpu as the demo-day fallback"),
         DeclareLaunchArgument("imgsz", default_value="640",
-                              description="Inference size (letterboxed from 640x480); must match what the .onnx was exported at"),
-        DeclareLaunchArgument("conf", default_value="0.5",
-                              description="Minimum confidence to publish"),
+                              description="Inference size for a .pt; .engine/.onnx use the size baked in at export"),
+        DeclareLaunchArgument("conf", default_value="0.4",
+                              description="Minimum confidence to publish (0.4: D-29/D-30; semantic_objects gates again at 0.5)"),
         DeclareLaunchArgument("debug", default_value="true",
                               description="Publish the annotated image on /detections/image"),
         DeclareLaunchArgument("venv", default_value=DEFAULT_VENV,

@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 ROS_DISTRO ?= humble
 
-.PHONY: build sim real slam nav explore rviz save-map bag bag-play yolo yolo-onnx camera calib calib-report calib-scale semantic test bridge bridge-venv ui ui-deps teleop teleop-nav udev ports net net-check viewer-sync lidar-deps explore-deps clean
+.PHONY: build sim real slam nav explore rviz save-map bag bag-play yolo yolo-onnx yolo-engine camera calib calib-report calib-scale semantic test bridge bridge-venv ui ui-deps teleop teleop-nav udev ports net net-check viewer-sync lidar-deps explore-deps clean
 
 build:
 	source /opt/ros/$(ROS_DISTRO)/setup.bash && colcon build --symlink-install
@@ -220,13 +220,21 @@ bag-play:
 # Smaller input:    make yolo IMGSZ=480                        (re-exports)
 # No GPU:           make yolo DEVICE=cpu           (demo-day fallback, ~5 Hz)
 # Gate check:       ros2 run my_bot detection_report.py --seconds 300
-MODEL      ?= $(HOME)/yolo/yolo26s.onnx
+# The deployed detector (D-30): yolo26l as a TensorRT fp16 engine at the
+# camera's 480x640, conf 0.4 -- what objective 2 (82.2 %) and objective 3
+# (15.16 Hz with SLAM) were measured on. The engine is a per-board cache of
+# ENGINE_PT; `yolo-engine` rebuilds it if it is missing (~13 min, needs the
+# stack DOWN). The old default is one flag away:
+#   make yolo MODEL=$(HOME)/yolo/yolo26s.onnx CONF=0.5
+MODEL      ?= $(HOME)/yolo/yolo26l_480x640.engine
+ENGINE_PT  ?= $(HOME)/yolo/yolo26l.pt
+ENGINE_IMGSZ ?= 480 640
 PT_MODEL   ?= $(MODEL:.onnx=.pt)
 IMGSZ      ?= 640
 # Detector publish threshold. The semantic layer gates again at its own
 # min_confidence (semantic_objects/config/robot_params.yaml, 0.5), so lowering
 # this changes what /detections carries, not what reaches the map.
-CONF       ?= 0.5
+CONF       ?= 0.4
 DEVICE     ?= cuda:0
 USE_CAMERA ?= true
 ONNX_OPSET ?= 17
@@ -247,7 +255,18 @@ yolo-onnx:
 	    $(if $(filter true,$(FORCE)),--force,); \
 	fi
 
-yolo: build yolo-onnx
+# Skips itself unless MODEL is an .engine that does not exist yet. Refuses to
+# build with less than ~4.5 GB free, i.e. with the stack up (no disk swap).
+yolo-engine:
+	@if [ "$(suffix $(MODEL))" != ".engine" ]; then \
+	  echo "MODEL=$(MODEL) is not .engine -- skipping the engine build."; \
+	else \
+	  $(YOLO_VENV)/bin/python yolo/export_engine.py \
+	    --model $(ENGINE_PT) --out $(MODEL) --imgsz $(ENGINE_IMGSZ) \
+	    $(if $(filter true,$(FORCE)),--force,); \
+	fi
+
+yolo: build yolo-onnx yolo-engine
 	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
 	source install/setup.bash && \
 	ros2 launch my_bot yolo.launch.py model:=$(MODEL) imgsz:=$(IMGSZ) conf:=$(CONF) \
