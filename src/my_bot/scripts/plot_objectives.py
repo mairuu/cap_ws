@@ -19,6 +19,8 @@ and the table's number come from the same bytes:
     python3 plot_objectives.py all --out ~/cap_ref/figures
     python3 plot_objectives.py slam --slam-session ~/maps/slam_accuracy.jsonl
     python3 plot_objectives.py resource --window "full stack"   # label substring
+    python3 plot_objectives.py resource --series 20260924-200759 \\
+        --exclude 129:175 --exclude 521:          # stack not all up: shaded, not averaged
 
 Every figure prints the numbers it was drawn from, so the caption and the
 evaluation table can be copied from the same terminal.
@@ -75,6 +77,7 @@ T = {
         "res_a": "(ก) ตลอดรอบการทำงาน",
         "res_b": "(ข) CPU เฉลี่ยแต่ละสถานการณ์",
         "cpu_mean": "CPU เฉลี่ย (%)",
+        "excluded": "ช่วงที่ไม่ได้เปิดครบทั้งระบบ (ไม่นำมาคิด)",
     },
     "en": {
         "truth": "true position (tape)",
@@ -103,6 +106,7 @@ T = {
         "res_a": "(a) across the run",
         "res_b": "(b) mean CPU per scenario",
         "cpu_mean": "mean CPU (%)",
+        "excluded": "stack not all up (left out)",
     },
 }
 
@@ -315,17 +319,42 @@ def rolling(xs, n):
     return out
 
 
+def parse_spans(specs):
+    """--exclude "129:175" / "521:" -> [(129.0, 175.0), (521.0, inf)]."""
+    spans = []
+    for spec in specs or []:
+        a, _, b = spec.partition(":")
+        spans.append((float(a or 0), float(b) if b else math.inf))
+    return spans
+
+
+def window_stem(row):
+    return os.path.splitext(os.path.basename(row.get("samples_csv") or ""))[0]
+
+
 def plot_resource(args, L):
     rows = load_jsonl(args.resource_session) or []
     if not rows:
         print(f"resource: nothing in {args.resource_session}; skipped.")
         return 1
+    # A window shorter than --min-seconds is a stub (stopped early), not a scenario.
+    rows = [r for r in rows if (r.get("seconds") or 0) >= args.min_seconds]
     with_csv = [r for r in rows if r.get("samples_csv")
                 and os.path.exists(os.path.expanduser(r["samples_csv"]))]
-    if args.window:
+    if args.series:
+        with_csv = [r for r in with_csv if window_stem(r) == args.series]
+    elif args.window:
         with_csv = [r for r in with_csv if args.window in (r.get("label") or "")]
     series = with_csv[-1] if with_csv else None
     many = len(rows) > 1
+    spans = parse_spans(args.exclude)
+    names = dict(n.split("=", 1) for n in args.bar_label or [])
+
+    def excluded(t):
+        return any(a <= t < b for a, b in spans)
+
+    # The plotted window's mean is over the kept samples only; its bar uses the same.
+    kept_mean = None
 
     fig, axes = plt.subplots(1, 2 if many else 1, figsize=(10 if many else 7, 4.2),
                              gridspec_kw={"width_ratios": [1.6, 1]} if many else None)
@@ -346,16 +375,24 @@ def plot_resource(args, L):
         if ram:
             a.plot([g[0] for g in ram], [g[1] for g in ram], color=AQUA, lw=2,
                    label=L["ram"])
-        mean = statistics.fmean(cpu)
-        a.axhline(mean, color=BLUE, lw=1, ls=":", zorder=1)
-        a.annotate(f"{mean:.1f} %", xy=(0, mean), xycoords=("axes fraction", "data"),
+        for i, (lo, hi) in enumerate(spans):
+            a.axvspan(lo, min(hi, t[-1]), color=GRID, alpha=0.9, lw=0, zorder=0,
+                      label=L["excluded"] if i == 0 else None)
+        kept = [c for tt, c in zip(t, cpu) if not excluded(tt)]
+        kept_mean = statistics.fmean(kept)
+        a.axhline(kept_mean, color=BLUE, lw=1, ls=":", zorder=1)
+        a.annotate(f"{kept_mean:.1f} %", xy=(0, kept_mean),
+                   xycoords=("axes fraction", "data"),
                    xytext=(3, 3), textcoords="offset points", color=INK, fontsize=9)
         limit_line(a, args.cpu_max, L["limit_res"])
         a.set_xlim(0, t[-1]); a.set_ylim(0, 105)
         a.set_xlabel(L["time"]); a.set_ylabel(L["pct"])
-        a.set_title(f"{L['res_a']}: {series.get('label') or ''}", loc="left",
-                    fontsize=10)
-        a.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=4, fontsize=8)
+        title = names.get(window_stem(series)) or series.get("label") or ""
+        a.set_title(f"{L['res_a']}: {title}", loc="left", fontsize=10)
+        a.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=3, fontsize=8)
+        print(f"resource: plotted {window_stem(series)}: {len(kept)}/{len(cpu)} samples "
+              f"kept, CPU mean {kept_mean:.1f} % "
+              f"(whole file {statistics.fmean(cpu):.1f} %)")
     else:
         a.text(0.5, 0.5, "no per-sample CSV yet\n(re-run resource_report.py)",
                ha="center", va="center", transform=a.transAxes, color=INK2)
@@ -363,11 +400,15 @@ def plot_resource(args, L):
         print("resource: no window has a per-sample CSV -- the time series needs a "
               "window recorded by the current resource_report.py.")
 
+    def bar_value(r):
+        return kept_mean if (series is r and kept_mean is not None) else r["cpu_mean"]
+
     if many:
         b = axes[1]
-        labels = [r.get("label") or "-" for r in rows]
-        vals = [r["cpu_mean"] for r in rows]
-        bars = b.barh(range(len(rows)), vals, height=0.6, color=BLUE, ec="white", lw=2)
+        labels = [names.get(window_stem(r)) or r.get("label") or "-" for r in rows]
+        vals = [bar_value(r) for r in rows]
+        colors = [BLUE if series is r else "#9fc3ec" for r in rows]
+        bars = b.barh(range(len(rows)), vals, height=0.6, color=colors, ec="white", lw=2)
         for bar, v in zip(bars, vals):
             b.annotate(f"{v:.1f}", (v, bar.get_y() + bar.get_height() / 2),
                        xytext=(3, 0), textcoords="offset points", va="center",
@@ -384,12 +425,14 @@ def plot_resource(args, L):
         b.grid(axis="y", visible=False)
     fig.tight_layout()
 
-    print(f"resource: {len(rows)} window(s)")
+    print(f"resource: {len(rows)} window(s) of >= {args.min_seconds:g} s")
     for r in rows:
-        print(f"      {(r.get('label') or '-')[:40]:<40} cpu {r['cpu_mean']:5.1f} %  "
+        v = bar_value(r)
+        print(f"      {window_stem(r):<16} {(r.get('label') or '-')[:30]:<30} cpu {v:5.1f} %  "
               f"gpu {(r.get('gpu_mean') or 0):5.1f} %  RAM peak {r.get('ram_peak_mb')} MB  "
               f"tj max {r.get('tj_max')} C  "
-              f"({'PASS' if r['cpu_mean'] <= args.cpu_max else 'FAIL'})")
+              f"({'PASS' if v <= args.cpu_max else 'FAIL'})"
+              f"{'  <- plotted, excluded spans removed' if series is r and spans else ''}")
     save(fig, args.out, "resource_usage.png")
     return 0
 
@@ -445,6 +488,17 @@ def main():
                                      "label contains this text")
     ap.add_argument("--smooth", type=int, default=15,
                     help="resource: rolling-mean window, samples (default 15)")
+    ap.add_argument("--series", metavar="STEM",
+                    help="resource: plot this window (CSV basename, e.g. "
+                         "20260924-200759) instead of the latest match")
+    ap.add_argument("--exclude", action="append", metavar="T0:T1",
+                    help="resource: seconds of the plotted window when the stack "
+                         "was not all up; shaded, and left out of its mean "
+                         "(repeatable; 'T0:' = to the end)")
+    ap.add_argument("--min-seconds", type=float, default=30.0,
+                    help="resource: drop windows shorter than this (stubs)")
+    ap.add_argument("--bar-label", action="append", metavar="STEM=TEXT",
+                    help="resource: name a window in the figure (repeatable)")
     ap.add_argument("--slam-max", type=float, default=0.10)
     ap.add_argument("--object-max", type=float, default=0.50)
     ap.add_argument("--cpu-max", type=float, default=80.0)
