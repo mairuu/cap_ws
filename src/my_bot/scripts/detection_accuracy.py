@@ -8,11 +8,13 @@ no held-out split of ours to score. The answer that document recommends is to
 build an in-situ test set from a bag and score THE DEPLOYED DETECTOR IN THE ROOM
 IT IS DEPLOYED IN. This script is that measurement, end to end.
 
-Four steps, four subcommands:
+Five subcommands:
 
     extract   pull every Nth frame out of a bag, plus the /detections that were
               published for those same frames -- the ONNX predictions that
               actually ran, not a re-run
+    prelabel  draft labels from a larger model into labels_draft/, to be
+              corrected by hand -- optional, saves drawing every box
     predict   run another model (e.g. the .pt) over the SAME frames, so the
               export decision can be scored rather than asserted
     score     match predictions to hand labels at IoU >= 0.5, report per-class
@@ -46,7 +48,10 @@ TYPICAL RUN
     python3 detection_accuracy.py extract \\
         --bag ~/bags/2026-09-22-163401 --out ~/eval/insitu --every 23
 
-    # 2. label ~/eval/insitu/frames/*.jpg into ~/eval/insitu/labels/
+    # 2. label ~/eval/insitu/frames/*.jpg into ~/eval/insitu/labels/ -- optionally
+    #    start from drafts by a larger model, then correct every frame by hand
+    ~/yolo/venv/bin/python detection_accuracy.py prelabel --data ~/eval/insitu \\
+        --model yolo26x.pt --classes person chair backpack laptop
 
     # 3. the number for the report
     python3 detection_accuracy.py score --data ~/eval/insitu \\
@@ -297,6 +302,65 @@ def cmd_predict(args):
                    "frames": preds}, fh)
     total = sum(len(v) for v in preds.values())
     print("wrote %s -- %d frames, %d detections" % (out, len(preds), total))
+
+
+# ---------------------------------------------------------------------------
+# prelabel
+# ---------------------------------------------------------------------------
+
+def cmd_prelabel(args):
+    """Draft labels from a DIFFERENT, larger model, for a human to correct.
+
+    Drafts go to labels_draft/, never labels/, so an unreviewed draft cannot be
+    scored by accident. Using the deployed model here would score the detector
+    against itself; use a bigger one and still check every frame by hand."""
+    try:
+        from ultralytics import YOLO
+    except ImportError as e:
+        die("prelabel needs the ultralytics venv "
+            "(~/yolo/venv/bin/python): %s" % e)
+
+    data = expand(args.data)
+    frames_dir = os.path.join(data, "frames")
+    files = sorted(f for f in os.listdir(frames_dir) if f.endswith(".jpg"))
+    if not files:
+        die("no frames in %s -- run extract first" % frames_dir)
+    if "yolo26s" in os.path.basename(args.model):
+        die("%s is the deployed model -- drafting with it biases the labels toward "
+            "its own mistakes; use a larger one such as yolo26x.pt" % args.model)
+
+    out = os.path.join(data, "labels_draft")
+    os.makedirs(out, exist_ok=True)
+    if any(f.endswith(".txt") and f != "classes.txt" for f in os.listdir(out)):
+        die("%s already has drafts -- move or delete them first" % out)
+
+    model = YOLO(expand(args.model))
+    names = model.names
+    index = {c: i for i, c in enumerate(args.classes)}
+    counts = defaultdict(int)
+    for f in files:
+        res = model.predict(os.path.join(frames_dir, f), conf=args.conf,
+                            imgsz=args.imgsz, device=args.device, verbose=False)[0]
+        lines = []
+        for b in res.boxes:
+            cls = str(names.get(int(b.cls.item()), ""))
+            if cls not in index:
+                continue
+            cx, cy, bw, bh = b.xywhn[0].tolist()
+            lines.append("%d %.6f %.6f %.6f %.6f" % (index[cls], cx, cy, bw, bh))
+            counts[cls] += 1
+        with open(os.path.join(out, os.path.splitext(f)[0] + ".txt"), "w") as fh:
+            fh.write("\n".join(lines) + ("\n" if lines else ""))
+    with open(os.path.join(out, "classes.txt"), "w") as fh:
+        fh.write("\n".join(args.classes) + "\n")
+
+    print("wrote %d draft label files to %s (model %s, conf %.2f)"
+          % (len(files), out, os.path.basename(args.model), args.conf))
+    for cls in args.classes:
+        print("   %-12s %5d draft boxes" % (cls, counts[cls]))
+    print("\nNEXT: open frames/ in labelImg with save dir = labels_draft/, fix EVERY"
+          " frame\n      (delete wrong boxes, add missed ones, tighten edges), then"
+          "\n      mv %s/* %s/" % (out, os.path.join(data, "labels")))
 
 
 # ---------------------------------------------------------------------------
@@ -607,6 +671,18 @@ def main():
     p.add_argument("--imgsz", type=int, default=640)
     p.add_argument("--device", default="cuda:0")
     p.set_defaults(func=cmd_predict)
+
+    d = sub.add_parser("prelabel",
+                       help="draft labels from a larger model for hand correction")
+    d.add_argument("--data", required=True)
+    d.add_argument("--model", required=True, help="NOT the deployed model, e.g. yolo26x.pt")
+    d.add_argument("--classes", nargs="+", required=True,
+                   help="written to classes.txt in this order")
+    d.add_argument("--conf", type=float, default=0.25,
+                   help="low on purpose: deleting a box is faster than drawing one")
+    d.add_argument("--imgsz", type=int, default=640)
+    d.add_argument("--device", default="cuda:0")
+    d.set_defaults(func=cmd_prelabel)
 
     s = sub.add_parser("score", help="match predictions to labels and report P/R/F1")
     s.add_argument("--data", required=True)
