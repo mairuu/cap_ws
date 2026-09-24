@@ -107,6 +107,12 @@ install(PROGRAMS
   # Day-6/7 fusion check: scores /semantic_landmarks for one class against a
   # tape-measured truth (error, spread, duplicates). Listen only.
   scripts/landmark_tape_measure.py
+  # Objective 4 without a map survey: the tape is measured from the parked
+  # robot (forward/left of base_footprint), so no HOME point is needed. Listen only.
+  scripts/object_accuracy.py
+  # Objective 2: extract/predict/score/compare on hand-labelled bag frames.
+  # Offline -- no ROS graph needed for predict/score.
+  scripts/detection_accuracy.py
   # Objective 1 and 4 of the report's evaluation table: SLAM pose error against
   # tape-measured marks, and CPU/GPU/RAM/thermals through a run. Neither drives
   # the robot; slam_accuracy_check.py needs `make slam` for the map frame,
