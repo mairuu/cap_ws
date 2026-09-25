@@ -115,7 +115,16 @@ slam_toolbox:
     minimum_travel_heading: 0.2
     scan_buffer_size: 10
     scan_buffer_maximum_scan_distance: 10.0
-    link_match_minimum_response_fine: 0.1
+    # TUNED 2026-09-25 (D-32): upstream 0.1. The near-chain matcher bypasses
+    # odometry entirely. MapperGraph::LinkNearChains matches each new keyframe
+    # against every older chain within link_scan_maximum_distance with
+    # doPenalize=false, and AddEdges then OVERWRITES the keyframe's pose with
+    # the covariance-weighted mean of those matches and the penalised
+    # sequential one. At 0.1 almost any overlap qualifies, so on a revisit
+    # (lap 2) weak, unpenalised matches out-vote odometry every keyframe --
+    # which is what the penalties below were meant to prevent. 0.35 admits
+    # only real overlaps; loop closure (0.45 fine) stays the stricter gate.
+    link_match_minimum_response_fine: 0.35
     link_scan_maximum_distance: 1.5
     loop_search_maximum_distance: 3.0
     do_loop_closing: true
@@ -172,11 +181,15 @@ slam_toolbox:
     # leave odometry's answer. Loop closure uses a separate matcher with
     # doPenalize=false and is unaffected.
     #
-    # If check_pose_stability.py still reports the correction travelling far
-    # more than it nets, the next step is distance_variance_penalty 0.05, not
-    # a wider window.
+    # 2026-09-15: 0.1 / 0.2 -> 0.05 / 0.15 (D-18's stated next step; the Day 3
+    # gate map was built with it).
+    #
+    # TUNED 2026-09-25 (D-32), angle 0.15 -> 0.1: 3 deg off odom now costs
+    # 5.5 %, 5.7 deg costs 20 %, 7 deg+ sits on the 0.7 floor below. Distance
+    # stays 0.05 (5 cm costs 20 %); what changed for distance is the FLOOR,
+    # minimum_distance_penalty below.
     distance_variance_penalty: 0.05
-    angle_variance_penalty: 0.15
+    angle_variance_penalty: 0.1
 
     fine_search_angle_offset: 0.00349
     # TUNED 2026-09-11 (D-18): upstream 0.349 (+/-20 deg). Per 0.2 rad keyframe
@@ -190,8 +203,17 @@ slam_toolbox:
     # angle penalty reaches 0.9 at 8 deg; leaving the floor there would make
     # 8 deg and 10 deg cost the same. 0.8 keeps the gradient out to the edge of
     # the +/-10 deg window.
-    minimum_angle_penalty: 0.8
-    minimum_distance_penalty: 0.5
+    #
+    # TUNED 2026-09-25 (D-32): 0.8 -> 0.7 to go with angle_variance_penalty
+    # 0.1, which reaches 0.8 at 5.7 deg; 0.7 keeps the gradient to 7 deg.
+    minimum_angle_penalty: 0.7
+    # TUNED 2026-09-25 (D-32): upstream 0.5. With distance_variance_penalty
+    # 0.05 the penalty hit a 0.5 floor at 7.9 cm, so every candidate from 8 cm
+    # to the 15 cm window edge cost the SAME -- odometry stopped arguing past
+    # 8 cm, which is where a wrong-wall match lives. 0.3 moves the floor to
+    # 9.4 cm and makes the far candidates need 3.3x odometry's correlation
+    # (was 2x). Real slip is still inside the window, just harder to accept.
+    minimum_distance_penalty: 0.3
     use_response_expansion: true
     min_pass_through: 2
     occupancy_threshold: 0.1
